@@ -16,8 +16,6 @@ from math import *
 import sellcs
 import json
 
-#GPU kernels are written using NUMBA
-
 def memory_benchmarks():
     benchmarks = {'label': 'undefined', 'triad': 0, 'load': 0, 'store': 0, 'copy': 0}
     try:

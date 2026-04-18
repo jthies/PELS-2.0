@@ -22,7 +22,7 @@ have_c_kernels = False
 have_RACE = False
 
 try:
-    import kernels_cpu as cpu
+    import kernels_c as cpu
     have_c_kernels=True
     print('Using C kernels on CPU')
 except:
