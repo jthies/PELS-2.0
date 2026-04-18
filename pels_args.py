@@ -29,11 +29,5 @@ def get_argparser():
                     help='Sorting scope sigma for SELL-C-sigma format.')
     parser.add_argument('-seed', type=int, default=None,
                     help='Random seed to make runs reproducible')
-    parser.add_argument('-c_kernels', action=BooleanOptionalAction,
-                    help='Use C/OpenMP kernels for the CPU (instead of Numba).'
-                         '-c_kernels is required for using RACE, but may cause a conflict with the GPU (numba) kernels.')
-
-    parser.add_argument('-numa', action=BooleanOptionalAction,
-                    help='Do first-touch initialization for Non-Uniform Memory Access (NUMA, e.g. multi-socket CPUs). May cause some additional copy operations during setup.')
 
     return parser

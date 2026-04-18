@@ -101,7 +101,6 @@ if __name__ == '__main__':
     from scipy.sparse import *
     from scipy.io import mmread
     from sellcs import sellcs_matrix
-    from poly_op import *
 
     from matrix_generator import create_matrix
     from pels_args import *
@@ -192,15 +191,6 @@ if __name__ == '__main__':
         x0 = to_device(x0)
         b  = to_device(b)
         A  = to_device(A)
-    elif type=='cpu':
-        # First-touch (re-)initialize all arrays.
-        # We can't do it consistently beforehand because
-        # we're calling library functions like numpy 'rand'
-        # and scipy 'mmread'.
-        if args.numa:
-            x0 = copy(x0)
-            b  = copy(b)
-            A  = copy(A)
 
     # take compilation time out of the balance:
     compile_all()

@@ -18,30 +18,7 @@ import sellcs
 import sys
 import os
 
-have_c_kernels = False
-have_RACE = False
-
-try:
-    import kernels_c as cpu
-    have_c_kernels=True
-    print('Using C kernels on CPU')
-except:
-    print('Failed to import/compile C kernels, you may need to adjust "make.inc".\n')
-
-
-if '-use_RACE' in sys.argv or 'USE_RACE' in os.environ:
-    import race_mpk
-    print('RACE is loaded and available.')
-    have_RACE = race_mpk.have_RACE
-
-if '-use_INTEL_MKL' in sys.argv or 'USE_INTEL_MKL' in os.environ:
-    import intel_mkl
-    print('Intel MKL is loaded and available.')
-    have_MKL = intel_mkl.have_MKL
-    
-# for benchmarking numpy/scipy implementations,
-# uncomment this line instead of the above:
-#import kernels_numpy as cpu
+import kernels_cpu as cpu
 
 try:
     from numba import cuda
