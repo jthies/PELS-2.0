@@ -101,7 +101,6 @@ def cu_dot(x,y,s):
     # of threads:
     stride = cuda.gridDim.x*bdx
 
-    s[0] = 0.0
     s_shared = cuda.shared.array(shape=(128), dtype=float64) # array with one element per thread in the block
     s_shared[tx] = 0.0
     s_local = 0.0 # scalar value per thread
@@ -203,6 +202,7 @@ def dot(x,y):
     BlocksPerGrid   =1024
 #    BlocksPerGrid   = min(32, (x.size+ThreadsPerBlock-1)//ThreadsPerBlock)
     s = cuda.device_array(shape=(1), dtype=np.float64)
+    s[0] = 0.0
     cu_dot[BlocksPerGrid,ThreadsPerBlock](x,y,s)
     return s.copy_to_host()[0]
 
