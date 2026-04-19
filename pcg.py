@@ -11,87 +11,105 @@
 import numpy as np
 from kernels import *
 
-def cg_solve(A, b, x0, tol, maxit, verbose=True, x_ex=None):
+def cg_solve(A, M, b, x0, tol, maxit, verbose=True, x_ex=None):
     '''
-    x, tol, iter = cg_solve(A, b, x0, tol, maxit)
-    Where A is an spd scipy.sparse.csr_matrix, b and x0 are numpy.array's of size A.shpae[0],
-    tol is the convergence tolerance and maxit the maximum number of iterations.
+    Right-Preconditioned CG Solver
+    A: System matrix
+    M: Preconditioner (must have an .apply(in, out) or similar method)
     '''
     x = clone(b)
     r = clone(b)
     p = clone(b)
     q = clone(b)
 
+    if M is None:
+        z = r
+    else:
+        z = clone(b) # Preconditioned residual
+
     if x_ex is not None:
-        print('PerfWarning: providing the exact solution x_ex results in additional operations to calculate and print the error norm.')
+        print('PerfWarning: Extra operations enabled for error norm.')
         err = clone(b)
 
     tol2 = tol*tol
 
-
-    axpby(1.0,x0,0.0,x)
-
-    #r = A*x
+    # Initial Residual: r = b - A*x0
+    axpby(1.0, x0, 0.0, x)
     if hasattr(A, 'apply'):
         A.apply(x, r)
     else:
         spmv(A, x, r)
-    #r = b - r
     axpby(1.0, b, -1.0, r)
-    #p = r
-    axpby(1.0, r, 0.0, p)
 
-    # rho = <r, r>
-    rho = dot(r,r);
-    rho_old = 1.0
+    # Initial Preconditioning: z = M^-1 * r
+    if M is not None:
+        M.apply(r, z)
+
+    # Initial search direction: p = z
+    axpby(1.0, z, 0.0, p)
+
+    # rho = <r, z> (The preconditioned scalar)
+    rho = dot(r, z)
+
+    # We use the true residual norm for the stopping criterion
+    if M is not None:
+        res_norm_sq = dot(r, r)
+    else:
+        res_norm_sq = rho
+
     if verbose:
-        print('%d\t%e'%(0, np.sqrt(rho)))
+        print('%d\t%e'%(0, np.sqrt(res_norm_sq)))
 
+    for iter in range(maxit + 1):
 
-    for iter in range(maxit+1):
+        # Check stopping criteria on the true residual
+        if res_norm_sq < tol2:
+            break
 
-        # check stop criteria
-        if rho < tol2:
-            break;
-
-        # q = A*p
+        # q = A * p
         if hasattr(A, 'apply'):
             A.apply(p, q)
         else:
             spmv(A, p, q)
 
-        pq = dot(p,q)
+        # alpha = <r, z> / <p, Ap>
+        pq = dot(p, q)
         alpha = rho / pq
-        # x = x+alpha*p
+
+        # x = x + alpha * p
         axpby(alpha, p, 1.0, x)
-        # r = r - alpha*q
+
+        # r = r - alpha * q
         axpby(-alpha, q, 1.0, r)
 
+        # Update preconditioned residual: z = M^-1 * r
+        if M is not None:
+            M.apply(r, z)
+
         rho_old = rho
-        rho = dot(r, r)
+        rho = dot(r, z)
+        if M is not None:
+            res_norm_sq = dot(r, r)
+        else:
+            res_norm_sq = rho
 
         if verbose:
             if x_ex is not None:
-                if hasattr(A, 'unprec_sol'):
-                    A.unprec_sol(x, err)
-                else:
-                    axpby(1.0, x, 0.0, err)
+                axpby(1.0, x, 0.0, err)
                 axpby(-1.0, x_ex, 1.0, err)
                 err_norm = np.sqrt(dot(err, err))
-                print('%d\t%e\t%e'%(iter+1, np.sqrt(rho), err_norm))
+                print('%d\t%e\t%e'%(iter+1, np.sqrt(res_norm_sq), err_norm))
             else:
                 print('%d\t%e'%(iter+1, np.sqrt(rho)))
 
+        # beta = <r_new, z_new> / <r_old, z_old>
         beta = rho / rho_old
-        # p = r+beta*p
-        axpby (1.0, r, beta, p)
 
-    iter_count = iter
-    final_residual = np.sqrt(rho)
+        # p = z + beta * p
+        axpby(1.0, z, beta, p)
 
-    return x, final_residual, iter_count
-
-
+    res_norm_sq = dot(r, r)
+    return x, np.sqrt(res_norm_sq), iter
 
 if __name__ == '__main__':
 
@@ -180,6 +198,8 @@ if __name__ == '__main__':
     else:
         print('Matrix format: CSR')
 
+    M = None
+
     if available_gpus()>0:
         type = 'gpu'
     else:
@@ -195,9 +215,6 @@ if __name__ == '__main__':
     # take compilation time out of the balance:
     compile_all()
 
-    A_prec = A
-    b_prec = b
-
     # we want to make sure what we measure during CG in total
     # is consistent with the sum of the kernel calls and their
     # runtime as predicted by the roofline model, so reset all
@@ -206,46 +223,32 @@ if __name__ == '__main__':
 
     t0 = perf_counter()
 
-    t0_pre = perf_counter()
-    if args.poly_k>0:
-        # building preconditioners typically requires a certain format,
-        # in our case, the poly_op class uses scipy functions tril and triu,
-        # which are not implemented by the sellcs_matrix class.
-        A_prec = poly_op(A_csr, args.poly_k, args.use_RACE, args.cache_size)
-        if A_prec.mpkHandle != None:
-            b = b[A_prec.permute]
-            A_csr = A_csr[A_prec.permute[:,None], A_prec.permute]
+    if M is not None:
+        t0_pre = perf_counter()
+        # setup preconditioner...
+        # ...
         if args.fmt == 'SELL':
             # note: If A was originally sorted by row-length (sigma>1), use the same
             # sorting for L and U to avoid intermittent permutation by setting sigma=1.
             # There still seems to be some kind of bug, though, because the number of
             # iterations will increase with poly_k>0 and sigma>1. Hence this warning.
-            A_prec.L = to_device(sellcs_matrix(A_csr=A_prec.L, C=args.C, sigma=1))
-            A_prec.U = to_device(sellcs_matrix(A_csr=A_prec.U, C=args.C, sigma=1))
-        b_prec = copy(b)
-        A_prec.prec_rhs(b, b_prec)
+            M.L = to_device(sellcs_matrix(A_csr=M.L, C=args.C, sigma=1))
+        t1_pre = perf_counter()
 
     x_ex_in = None
     if args.printerr:
         x_ex_in = x_ex
 
-    t1_pre = perf_counter()
-
     t0_soln = perf_counter()
-    x_prec, relres, iter = cg_solve(A_prec,b_prec,x0,tol,maxit, x_ex=x_ex_in)
+    x, relres, iter = cg_solve(A,M, b,x0,tol,maxit, x_ex=x_ex_in)
     t1_soln = perf_counter()
 
-    if args.poly_k>0:
-        x = clone(x_prec)
-        A_prec.unprec_sol(x_prec, x)
-    else:
-        x = x_prec
-
     t1 = perf_counter()
-    t_pre = t1_pre-t0_pre
-    t_soln = t1_soln-t0_soln
     t_CG = t1-t0
-    gc.enable()
+
+    if M is not None:
+        t_pre = t1_pre-t0_pre
+        t_soln = t1_soln-t0_soln
 
     x = to_host(x)
 
@@ -258,10 +261,6 @@ if __name__ == '__main__':
     if args.fmt=='SELL' and sigma>1:
         x = x[A.unpermute]
 
-    if args.poly_k>0:
-        if A_prec.mpkHandle != None:
-            x = x[A_prec.unpermute]
-
     print('relative error of computed solution: %e'%(norm(x-x_ex)/norm(x_ex)))
 
     hw_string = type
@@ -269,7 +268,7 @@ if __name__ == '__main__':
         hw_string+=' ('+str(numba.threading_layer())+', '+str(numba.get_num_threads())+' threads)'
     print('Hardware: '+hw_string)
     perf_report(type)
-    if args.poly_k>0:
+    if M is not None:
         print('Total time for constructing precon: %g seconds.'%(t_pre))
         print('Total time for solving: %g seconds.'%(t_soln))
     print('Total time for CG: %g seconds.'%(t_CG))
