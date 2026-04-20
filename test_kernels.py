@@ -14,8 +14,9 @@ from parameterized import parameterized_class, parameterized
 
 import os
 import numpy as np
-from mathfuncs import *
+from kernels import *
 import scipy
+
 
 def diff_norm(x, y):
     '''
@@ -101,7 +102,7 @@ def test_dot_rand(N):
 class SparseMatKernelsTest(unittest.TestCase):
 
     def setUp(self):
-        self.A=scipy.sparse.csr_matrix(scipy.io.mmread(self.Matrix+'.mm.gz'))
+        self.A=scipy.sparse.csr_matrix(scipy.io.mmread('matrices/'+self.Matrix+'.mm.gz'))
         self.n=self.A.shape[0]
         self.x_host=np.arange(self.n, dtype='float64')+1
         self.yref=self.A*self.x_host

@@ -20,11 +20,6 @@ import sellcs
 import sys
 import os
 
-
-def check_device_array(x):
-    if not cuda.is_cuda_array(x):
-        raise 'Not a CUDA array'
-
 def available_gpus():
     if cuda is None or (os.environ.get('USE_CPU')=="1" or os.environ.get('USE_CPU')=="True"):
         return 0

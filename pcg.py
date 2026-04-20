@@ -9,7 +9,7 @@
 #/*******************************************************************************************/
 
 import numpy as np
-from mathfuncs import *
+from kernels import *
 
 def cg_solve(A, M, b, x0, tol, maxit, verbose=True, x_ex=None):
     '''

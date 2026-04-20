@@ -13,7 +13,7 @@ import pytest
 from parameterized import parameterized_class
 
 import numpy as np
-from mathfuncs import *
+from kernels import *
 from pcg import *
 from matrix_generator import create_matrix
 
