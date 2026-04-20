@@ -5,7 +5,6 @@ def get_argparser():
     pels_argparser() returns an argparse.ArgumentParser object that
     offers some useful settings for, e.g.,:
 
-    - selecting the kernels to be used
     - selecting the sparse matrix format (CSR or SELL-C-sigma)
     - setting solver parameters like number of iterations and convergence tolerance
     - etc.

@@ -14,38 +14,6 @@ from numba import cuda, float64
 import scipy
 from math import *
 import sellcs
-import json
-
-def memory_benchmarks():
-    benchmarks = {'label': 'undefined', 'triad': 0, 'load': 0, 'store': 0, 'copy': 0}
-    try:
-        with open('gpu.json', 'r') as f:
-            benchmarks = json.load(f)
-    except:
-        pass
-    return benchmarks
-
-def to_device(A):
-    if type(A) == scipy.sparse.csr_matrix or type(A) == sellcs.sellcs_matrix:
-        A.cu_data = cuda.to_device(A.data)
-        A.cu_indptr = cuda.to_device(A.indptr)
-        A.cu_indices = cuda.to_device(A.indices)
-        return A
-    elif type(A) == scipy.sparse.dia_matrix:
-        A.cu_data = cuda.to_device(A.data.reshape(A.data.size*A.offsets.size))
-        A.cu_offsets = cuda.to_device(A.offsets)
-        return A
-    else:
-        return cuda.to_device(A)
-
-def from_device(A):
-    if type(A) == scipy.sparse.csr_matrix or type(A) == sellcs.sellcs_matrix:
-        A.data = A.cu_data.copy_to_host()
-        A.indices = A.cu_indices.copy_to_host()
-        A.indptr = A.cu_indptr.copy_to_host()
-        return A
-    else:
-        return cuda.to_device(A)
 
 ################
 # CUDA kernels #
@@ -175,48 +143,6 @@ def cu_sell_spmv(valA, cptrA, colA, C, x, y):
 # 'nosync' parameter to each function to allow optimization of complete        #
 # algorithms.                                                                  #
 ################################################################################
-
-def axpby(a,x,b,y):
-    cu_axpby.forall(x.size)(a,x,b,y)
-    cuda.synchronize()
-
-def init(v, val):
-    cu_init.forall(v.size)(v,val)
-    cuda.synchronize()
-
-def vscale(v, x, y):
-    cu_vscale.forall(x.size)(v, x, y)
-    '''
-    Vector scaling x[i] = v[i]*x[i]
-    '''
-
-def dot(x,y):
-    ##return cu_dot2.forall(x.size)(x,y)
-    #
-    # note: we could do "forall" here as well,
-    # but the cu_dot implementation requires that
-    # the threads per block are a power of two. This
-    # is almost certainly the case by default, but to be
-    # sure, we enforce it here.
-    ThreadsPerBlock = 128
-    BlocksPerGrid   =1024
-#    BlocksPerGrid   = min(32, (x.size+ThreadsPerBlock-1)//ThreadsPerBlock)
-    s = cuda.device_array(shape=(1), dtype=np.float64)
-    s[0] = 0.0
-    cu_dot[BlocksPerGrid,ThreadsPerBlock](x,y,s)
-    return s.copy_to_host()[0]
-
-def csr_spmv(valA,rptrA,colA, x, y):
-        nrows = len(x)
-        cu_csr_spmv.forall(nrows)(valA,rptrA,colA,x,y)
-        cuda.synchronize()
-        #print(y.copy_to_host())
-
-
-def sell_spmv(valA,cptrA,colA, C, x, y):
-        nchunks = len(cptrA)-1
-        cu_sell_spmv[nchunks, C](valA, cptrA, colA, C, x, y)
-        cuda.synchronize()
 
 
 if __name__ == '__main__':

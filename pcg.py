@@ -9,7 +9,7 @@
 #/*******************************************************************************************/
 
 import numpy as np
-from kernels import *
+from mathfuncs import *
 
 def cg_solve(A, M, b, x0, tol, maxit, verbose=True, x_ex=None):
     '''
@@ -163,6 +163,8 @@ if __name__ == '__main__':
         A = csr_matrix(mmread(args.matfile))
     elif args.matgen != 'None':
         A = create_matrix(args.matgen)
+    else:
+        raise 'You must specify either -matgen or -matfile. Use --help for more information.'
     N = A.shape[0]
 
     if args.solfile!='None':
@@ -200,17 +202,9 @@ if __name__ == '__main__':
 
     M = None
 
-    if available_gpus()>0:
-        type = 'gpu'
-    else:
-        type = 'cpu'
-
-    print('Will run on '+type)
-
-    if type=='gpu':
-        x0 = to_device(x0)
-        b  = to_device(b)
-        A  = to_device(A)
+    x0 = to_device(x0)
+    b  = to_device(b)
+    A  = to_device(A)
 
     # take compilation time out of the balance:
     compile_all()
@@ -254,8 +248,7 @@ if __name__ == '__main__':
 
     print('number of CG iterations: %d'%(iter))
     res = np.empty_like(x)
-    spmv(A_csr,x,res)
-    res=b-res
+    res = b - A@x
     print('relative residual of computed solution: %e'%(norm(res)/norm(b)))
 
     if args.fmt=='SELL' and sigma>1:
@@ -263,11 +256,9 @@ if __name__ == '__main__':
 
     print('relative error of computed solution: %e'%(norm(x-x_ex)/norm(x_ex)))
 
-    hw_string = type
-    if type=='cpu':
-        hw_string+=' ('+str(numba.threading_layer())+', '+str(numba.get_num_threads())+' threads)'
-    print('Hardware: '+hw_string)
-    perf_report(type)
+    print()
+    perf_report()
+
     if M is not None:
         print('Total time for constructing precon: %g seconds.'%(t_pre))
         print('Total time for solving: %g seconds.'%(t_soln))

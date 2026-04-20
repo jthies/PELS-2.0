@@ -14,7 +14,7 @@ from parameterized import parameterized_class, parameterized
 
 import os
 import numpy as np
-from kernels import *
+from mathfuncs import *
 import scipy
 
 def diff_norm(x, y):
