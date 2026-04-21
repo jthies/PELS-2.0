@@ -8,17 +8,19 @@
 #/*                                                                                         */
 #/*******************************************************************************************/
 
+import sys
+import os
 from time import perf_counter
+
 import numpy as np
 import scipy
 import numba
 
-from numba import cuda
-from cuda_kernels import *
 import sellcs
 
-import sys
-import os
+from numba import cuda
+from cuda_kernels import *
+from cupy_kernels import *
 
 def available_gpus():
     if cuda is None or (os.environ.get('USE_CPU')=="1" or os.environ.get('USE_CPU')=="True"):
@@ -34,6 +36,7 @@ def compile_all():
     a=numba.float64(1.0)
     b=numba.float64(1.0)
     A1=scipy.sparse.csr_matrix(scipy.sparse.rand(n,n,0.6))
+    L =scipy.sparse.tril(A1)
     A2=sellcs.sellcs_matrix(A1, C=1, sigma=1)
 
     # compile GPU kernels:
@@ -43,6 +46,7 @@ def compile_all():
     tmp = from_device(x)
     y = to_device(x)
     A1 = to_device(A1)
+    L = to_device(L)
     tmp= from_device(A1)
     A2 = to_device(A2)
     tmp = from_device(A2)
@@ -52,6 +56,7 @@ def compile_all():
     axpby(a,x,b,y)
     spmv(A1,x,y)
     spmv(A2,x,y)
+    trsv(L,x,y)
     diag_spmv(A1,x,y)
     reset_counters()
 
@@ -89,15 +94,15 @@ def to_host(A):
 
 
 # total number of calls
-calls = {'spmv': 0, 'axpby': 0, 'dot': 0, 'init': 0}
+calls = {'trsv': 0, 'spmv': 0, 'axpby': 0, 'dot': 0, 'init': 0}
 # total elapsed time in seconds
-time = {'spmv': 0.0, 'axpby': 0.0, 'dot': 0.0, 'init':0.0}
+time = {'trsv': 0, 'spmv': 0.0, 'axpby': 0.0, 'dot': 0.0, 'init':0.0}
 # total loaded data in GB
-load = {'spmv': 0.0, 'axpby': 0.0, 'dot': 0.0, 'init':0.0}
+load = {'trsv': 0.0, 'spmv': 0.0, 'axpby': 0.0, 'dot': 0.0, 'init':0.0}
 # total stored data in GB
-store = {'spmv': 0.0, 'axpby': 0.0, 'dot': 0.0, 'init':0.0}
+store = {'trsv': 0.0, 'spmv': 0.0, 'axpby': 0.0, 'dot': 0.0, 'init':0.0}
 # total floating point operations [GFlop]
-flop = {'spmv': 0.0, 'axpby': 0.0, 'dot': 0.0, 'init':0.0}
+flop = {'trsv': 0.0, 'spmv': 0.0, 'axpby': 0.0, 'dot': 0.0, 'init':0.0}
 
 def reset_counters():
     for k in calls.keys():
@@ -122,9 +127,6 @@ def csr_spmv(valA,rptrA,colA, x, y):
         nrows = len(x)
         cu_csr_spmv.forall(nrows)(valA,rptrA,colA,x,y)
         cuda.synchronize()
-        #print(y.copy_to_host())
-
-
 
 def sell_spmv(valA,cptrA,colA, C, x, y):
         nchunks = len(cptrA)-1
@@ -148,9 +150,49 @@ def spmv(A, x, y):
     store['spmv'] += 8*A.shape[0]
     flop['spmv'] += 2*A.nnz
 
+def trsv(L, x, b, transpose=False):
+    '''
+    Solves (i) Lx=b for x if transpose==False, or
+          *ii) L^Tx=b     if transpose==True,
+
+    where L is a sparse lower triangular matrix with
+    non-zero diagonal. Elements in each row must be stored
+    such that the diagonal is the last entry, but strict sorting
+    is not required.
+    '''
+
+    t0 = perf_counter()
+
+    if type(L)==scipy.sparse.csr_matrix:
+        cp_trsv(L, x, b, transpose)
+    elif type(L)==sellcs.sellcs_matrix:
+        raise Exception('trsv only implemented for csr matrices so far')
+    else:
+        raise TypeError('trsv wrapper only implemented for scipy.sparse.csr_matrix or sellcs.sellcs_matrix')
+    t1 = perf_counter()
+    time['trsv']  += t1-t0
+    calls['trsv'] += 1
+    load['trsv']  += 12*L.nnz+8*(L.shape[0]+L.shape[1])
+    store['trsv'] += 8*L.shape[0]
+    flop['trsv'] += 2*L.nnz
+
 def diag_spmv(A, x, y):
     cu_vscale.forall(x.size)(A.cu_data, x, y)
 
+
+def csr_trsv(valL,rptrL,colL, x, b, transpose=False):
+        '''
+        Call CUDA CSR triangular solve kernel. See trsv
+        function for description (and use it as entry point, not this one)
+        '''
+        nrows = len(x)
+        flag = cuda.device_array(x.shape, dtype=np.int8)
+        init(flag, np.int8(0))
+        if transpose==False:
+            cu_csr_trsv.forall(nrows)(valL,rptrL, colL, x,b, flag)
+        else:
+            cu_csr_trsv_trans.forall(nrows)(valL,rptrL, colL, x, b, flag)
+        cuda.synchronize()
 
 def clone(v):
     w = None

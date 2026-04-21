@@ -10,7 +10,7 @@
 
 import numpy as np
 import numba
-from numba import cuda, float64
+from numba import cuda, float64, int32, int8
 import scipy
 from math import *
 import sellcs
@@ -19,7 +19,7 @@ import sellcs
 # CUDA kernels #
 ################
 
-@cuda.jit
+@cuda.jit((float64, float64[:], float64, float64[:]))
 def cu_axpby(a,x,b,y):
 
     tx = cuda.threadIdx.x
@@ -39,7 +39,7 @@ def cu_init(x, val):
         x[i] = val
 
 
-@cuda.jit((float64[:],float64[:],float64[:]))
+@cuda.jit((float64[:], float64[:], float64[:]))
 def cu_vscale(v, x, y):
     '''
     Vector scaling y[i] = v[i]*x[i]
@@ -51,13 +51,12 @@ def cu_vscale(v, x, y):
     if i < x.size:
         y[i] = v[i]*x[i]
 
-# dot product is complicated on GPU's...
-# we first define a reduction operation that will be
-# used to get the final result over all thread blocks,
-# the actual kernel recursively sums up components into
-# a memory location shared within a block.
-
-@cuda.jit((float64[:],float64[:],float64[:]))
+# Our dot product uses three stages:
+# 1) A "grid-stride oop" to reduce the number of summands so they fit
+#    into shared emmory while reading x and y with high memory bandwidth,
+# 2) A binary tree reduction in shared memory to retain one number per thread block,
+# 3) An atomic add operation per thread block to produce the final sum.
+@cuda.jit((float64[:], float64[:], float64[:]))
 def cu_dot(x,y,s):
 
     tx = cuda.threadIdx.x
@@ -94,7 +93,7 @@ def cu_dot(x,y,s):
         # into s[0]:
         cuda.atomic.add(s, 0, s_shared[0])
 
-@cuda.jit
+@cuda.jit((float64[:], int32[:], int32[:], float64[:], float64[:]))
 def cu_csr_spmv(valA,rptrA,colA, x, y):
     tx = cuda.threadIdx.x
     bx = cuda.blockIdx.x
@@ -105,7 +104,7 @@ def cu_csr_spmv(valA,rptrA,colA, x, y):
         for j in range(rptrA[i], rptrA[i+1]):
             y[i] += valA[j]*x[colA[j]]
 
-@cuda.jit
+@cuda.jit((float64[:], int32[:], int32[:], int32, float64[:], float64[:]))
 def cu_sell_spmv(valA, cptrA, colA, C, x, y):
     '''
     This kernel assumes that it is launched with the block size equal to the
@@ -133,52 +132,3 @@ def cu_sell_spmv(valA, cptrA, colA, C, x, y):
         y_shared[tx] += valA[offs+j*c+tx] * x[colA[offs+j*c+tx]]
     y[row] = y_shared[tx]
 
-################################################################################
-# Wrapper functions to expose to the user.                                     #
-# Note that these will work both with regular (host-side) numpy arrays         #
-# and numba device arrays, but that the latter avoids the cost of trans-       #
-# ferring data to/from the GPU.                                                #
-# In order to allow timing the operations, we add a sync statement after       #
-# the kernel runs, but this is not strictly necessary and we could add a       #
-# 'nosync' parameter to each function to allow optimization of complete        #
-# algorithms.                                                                  #
-################################################################################
-
-
-if __name__ == '__main__':
-
-    from timeit import timeit
-
-    print('Numba GPU example. Available device(s):')
-    print(cuda.gpus)
-
-    N=2**26
-    ntimes=30
-
-    x_host = np.random.rand(N)
-    y_host = np.random.rand(N)
-    z_host = np.empty_like(x_host)
-    a = 42.9
-
-    # allocate device memory and copy x, y and z to the GPU
-    x = cuda.to_device(x_host)
-    y = cuda.to_device(y_host)
-    z = cuda.to_device(z_host)
-
-    # compile once and test results on host
-    axpy(a,x,y,z)
-    print('Error axpy: %e'%(np.linalg.norm(z.copy_to_host() - axpy_host(a, x_host, y_host, z_host), 2)))
-
-    s = dot(x,y)
-    print('Error   dot: %e'%(abs(s-np.dot(x_host,y_host))))
-
-    # measure
-
-    t = timeit(stmt='zz=axpy(a,x,y,z)', globals=globals(), number=ntimes)
-    print ('axpy: %8.4f GB/s\n'%(4*N*ntimes*8.0e-9/t))
-
-    t = timeit(stmt='s=dot(x,y)', globals=globals(), number=ntimes)
-    print ('dot: %8.4f GB/s\n'%(2*N*ntimes*8.0e-9/t))
-
-    # get the "result"
-    z.copy_to_host(z_host)

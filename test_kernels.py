@@ -103,14 +103,21 @@ class SparseMatKernelsTest(unittest.TestCase):
 
     def setUp(self):
         self.A=scipy.sparse.csr_matrix(scipy.io.mmread('matrices/'+self.Matrix+'.mm.gz'))
+        # add +1 to the diagonal because some test matrices may be singular
+        self.L = scipy.sparse.tril(self.A, format='csr') + scipy.sparse.eye(A.shape[0])
         self.n=self.A.shape[0]
         self.x_host=np.arange(self.n, dtype='float64')+1
-        self.yref=self.A*self.x_host
-        self.y_host=np.empty_like(self.yref)
+        self.Ax=self.A@self.x_host
+        self.Lx = self.L@self.x_host
+        self.Ltx = self.L.T@self.x_host
+        self.y_host=np.empty_like(self.Ax)
 
         self.x = to_device(self.x_host)
         self.y = to_device(self.y_host)
         self.A = to_device(self.A)
+        self.L = to_device(self.L)
+        self.Lx = to_device(self.Lx)
+        self.Ltx = to_device(self.Ltx)
 
         self.eps=1e-11
 
@@ -137,7 +144,21 @@ class SparseMatKernelsTest(unittest.TestCase):
 
     def test_csr_spmv(self):
         spmv(self.A, self.x, self.y)
-        assert(diff_norm(self.y, self.yref) < self.eps)
+        assert(diff_norm(self.y, self.Ax) < self.eps)
+
+
+    def test_csr_trsv(self):
+        # solve Ly = b (=Lx) for y
+        trsv(self.L, self.y, self.Lx)
+        # check that y ~= x
+        assert(diff_norm(self.x, self.y) < self.eps)
+
+
+    def test_csr_trsv_trans(self):
+        # solve L^Ty = b (=Ltx) for y
+        trsv(self.L, self.y, self.Ltx, True)
+        # check that y ~= x
+        assert(diff_norm(self.x, self.y) < self.eps)
 
 
     def test_sell_1_1_spmv(self):
@@ -145,7 +166,7 @@ class SparseMatKernelsTest(unittest.TestCase):
         if available_gpus()>0:
             Asell = to_device(Asell)
         spmv(Asell, self.x, self.y)
-        assert(diff_norm(self.y, self.yref) < self.eps)
+        assert(diff_norm(self.y, self.Ax) < self.eps)
         assert(Asell.nnz==Asell.indptr[Asell.nchunks])
 
 
@@ -159,7 +180,7 @@ class SparseMatKernelsTest(unittest.TestCase):
         assert(diff_norm(Asell.permute, np.arange(Asell.shape[0]))<self.eps)
         assert(diff_norm(Asell.unpermute, np.arange(Asell.shape[0]))<self.eps)
         spmv(Asell, self.x, self.y)
-        assert(diff_norm(self.y, self.yref) < self.eps)
+        assert(diff_norm(self.y, self.Ax) < self.eps)
         assert(Asell.nnz<=Asell.indptr[Asell.nchunks])
 
 
@@ -174,7 +195,7 @@ class SparseMatKernelsTest(unittest.TestCase):
         spmv(Asell, x, y)
         y = to_host(y)
         self.y = y[Asell.unpermute]
-        assert(diff_norm(self.y, self.yref) < self.eps)
+        assert(diff_norm(self.y, self.Ax) < self.eps)
 
     def test_sell_32_128_spmv(self):
         Asell = sellcs.sellcs_matrix(self.A, C=32, sigma=128)
@@ -186,5 +207,5 @@ class SparseMatKernelsTest(unittest.TestCase):
         spmv(Asell, x, y)
         y = to_host(y)
         self.y = y[Asell.unpermute]
-        assert(diff_norm(self.y, self.yref) < self.eps)
+        assert(diff_norm(self.y, self.Ax) < self.eps)
 
