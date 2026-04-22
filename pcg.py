@@ -111,28 +111,23 @@ def cg_solve(A, M, b, x0, tol, maxit, verbose=True, x_ex=None):
     res_norm_sq = dot(r, r)
     return x, np.sqrt(res_norm_sq), iter
 
-if __name__ == '__main__':
+import numba
+from numpy.linalg import norm
+from scipy.sparse import *
+from scipy.io import mmread
+from sellcs import sellcs_matrix
 
-    import numba
-    import gc
-    from numpy.linalg import norm
-    from scipy.sparse import *
-    from scipy.io import mmread
-    from sellcs import sellcs_matrix
+from precon import IChol0
 
-    from matrix_generator import create_matrix
-    from pels_args import *
+from matrix_generator import create_matrix
+from pels_args import *
+
+def pcg_main():
+
 
     ## **Note:** The Python garbage collector (gc)
     ## can kill the performance of the C kernels
     ## for some obscure reason (possibly a conflict
-    ## between Numba/LLVM and other compilers like GCC).
-    ## For the pure Python/numba/cuda kernels, this is not
-    ## the case, but if you are facing obvious performnace
-    ## problems with the C kernels, you may want to disalbe
-    ## garbage collection:
-    gc.disable()
-
     parser = get_argparser()
 
     # add driver-specific command-line arguments for polynomial preconditioning with or without RACE:
@@ -142,13 +137,6 @@ if __name__ == '__main__':
                     help='MatrixMarket filename for right-hand side vector b')
     parser.add_argument('-solfile', type=str, default='None',
                     help='MatrixMarket filename for exact solution x')
-    parser.add_argument('-poly_k', type=int, default=0,
-                    help='Use a degree-k polynomial preconditioner based on the Neumann series.')
-    parser.add_argument('-use_RACE', action=BooleanOptionalAction,
-                    help='Use RACE for cache blocking.')
-    parser.add_argument('-cache_size', type=float, default=30,
-                    help='Cache size used to perform RACE\'s cache blocking')
-
 
     args = parser.parse_args()
 
@@ -215,18 +203,18 @@ if __name__ == '__main__':
     # counters and timers:
     reset_counters()
 
+    M=None
     t0 = perf_counter()
 
-    if M is not None:
+    if args.precon is not None:
         t0_pre = perf_counter()
         # setup preconditioner...
-        # ...
-        if args.fmt == 'SELL':
-            # note: If A was originally sorted by row-length (sigma>1), use the same
-            # sorting for L and U to avoid intermittent permutation by setting sigma=1.
-            # There still seems to be some kind of bug, though, because the number of
-            # iterations will increase with poly_k>0 and sigma>1. Hence this warning.
-            M.L = to_device(sellcs_matrix(A_csr=M.L, C=args.C, sigma=1))
+        if args.precon=='IC0':
+            M = IChol0(A_csr)
+        else:
+            raise Exception("Unsupported parameter: -precon='"+args.precon+"'")
+        if args.fmt == 'SELL' and A.sigma!=1:
+            raise Exception("Preconditioning not implemented for SELL-C-simga format with sigma>1")
         t1_pre = perf_counter()
 
     x_ex_in = None
@@ -260,7 +248,11 @@ if __name__ == '__main__':
     perf_report()
 
     if M is not None:
-        print('Total time for constructing precon: %g seconds.'%(t_pre))
+        t_spmv = time['spmv']/calls['spmv']
+        print('Total time for constructing precon: %g seconds (%d spmvs).'%(t_pre, t_pre/t_spmv))
         print('Total time for solving: %g seconds.'%(t_soln))
+
     print('Total time for CG: %g seconds.'%(t_CG))
 
+if __name__ == '__main__':
+    pcg_main()

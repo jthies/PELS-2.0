@@ -28,5 +28,7 @@ def get_argparser():
                     help='Sorting scope sigma for SELL-C-sigma format.')
     parser.add_argument('-seed', type=int, default=None,
                     help='Random seed to make runs reproducible')
+    parser.add_argument('-precon', type=str, default=None,
+                    help='Preconditioner to be used [None,Jacobi,SGS,IC0]')
 
     return parser

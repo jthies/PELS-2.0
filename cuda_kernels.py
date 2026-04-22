@@ -10,7 +10,7 @@
 
 import numpy as np
 import numba
-from numba import cuda, float64, int32, int8
+from numba import cuda, float64, int32
 import scipy
 from math import *
 import sellcs
