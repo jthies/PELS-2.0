@@ -149,14 +149,14 @@ class SparseMatKernelsTest(unittest.TestCase):
 
     def test_csr_trsv(self):
         # solve Ly = b (=Lx) for y
-        trsv(self.L, self.y, self.Lx)
+        trsv(self.L, self.Lx, self.y)
         # check that y ~= x
         assert(diff_norm(self.x, self.y) < self.eps)
 
 
     def test_csr_trsv_trans(self):
         # solve L^Ty = b (=Ltx) for y
-        trsv(self.L, self.y, self.Ltx, True)
+        trsv(self.L, self.Ltx, self.y, True)
         # check that y ~= x
         assert(diff_norm(self.x, self.y) < self.eps)
 

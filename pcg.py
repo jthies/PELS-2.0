@@ -117,7 +117,7 @@ from scipy.sparse import *
 from scipy.io import mmread
 from sellcs import sellcs_matrix
 
-from precon import IChol0
+from precon import *
 
 from matrix_generator import create_matrix
 from pels_args import *
@@ -209,8 +209,14 @@ def pcg_main():
     if args.precon is not None:
         t0_pre = perf_counter()
         # setup preconditioner...
-        if args.precon=='IC0':
+        if   args.precon == 'Jacobi' or args.precon == 'jacobi':
+            M = Jacobi(A_csr)
+        elif args.precon == 'SGS':
+            M = SymmetricGaussSeidel(A_csr)
+        elif args.precon == 'IC0':
             M = IChol0(A_csr)
+        elif args.precon=='ILU0':
+            M = CuPyILU0(A_csr)
         else:
             raise Exception("Unsupported parameter: -precon='"+args.precon+"'")
         if args.fmt == 'SELL' and A.sigma!=1:

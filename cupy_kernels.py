@@ -27,7 +27,7 @@ def as_cupy(A):
     else:
         raise Exception('as_cupy not implemented for objects of type "'+str(type(A))+'"')
 
-def cp_trsv(L, x, b, transpose=False):
+def cp_trsv(L, b, x, transpose=False):
     '''
     If L is a lower triangular csr_matrix with added cu_ arrays
     (as used in the numba cuda_kernels), wraps the input in cupy and

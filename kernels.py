@@ -150,7 +150,7 @@ def spmv(A, x, y):
     store['spmv'] += 8*A.shape[0]
     flop['spmv'] += 2*A.nnz
 
-def trsv(L, x, b, transpose=False):
+def trsv(L, b, x, transpose=False):
     '''
     Solves (i) Lx=b for x if transpose==False, or
           *ii) L^Tx=b     if transpose==True,
@@ -164,7 +164,7 @@ def trsv(L, x, b, transpose=False):
     t0 = perf_counter()
 
     if type(L)==scipy.sparse.csr_matrix:
-        cp_trsv(L, x, b, transpose)
+        cp_trsv(L, b, x, transpose)
     elif type(L)==sellcs.sellcs_matrix:
         raise Exception('trsv only implemented for csr matrices so far')
     else:

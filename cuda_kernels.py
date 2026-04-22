@@ -39,6 +39,18 @@ def cu_init(x, val):
         x[i] = val
 
 
+@cuda.jit((float64[:], float64[:]))
+def cu_vscale_inplace(v, x):
+    '''
+    Vector scaling x[i] = v[i]*x[i]
+    '''
+    tx = cuda.threadIdx.x
+    bx = cuda.blockIdx.x
+    bdx = cuda.blockDim.x
+    i = bx * bdx + tx
+    if i < x.size:
+        x[i] = v[i]*x[i]
+
 @cuda.jit((float64[:], float64[:], float64[:]))
 def cu_vscale(v, x, y):
     '''

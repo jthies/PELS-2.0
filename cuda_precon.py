@@ -1,5 +1,13 @@
 import math
-from numba import cuda
+import numpy as np
+import numba
+from numba import cuda, float64
+
+@cuda.jit
+def cu_invert(v: float64[:]):
+    idx = cuda.grid(1)
+    if idx < v.size:
+        v[idx] = 1.0/v[idx]
 
 @cuda.jit
 def cu_ichol0(L_data, L_row_idx, L_col_idx, L_indptr):
@@ -48,7 +56,7 @@ def cu_ichol0(L_data, L_row_idx, L_col_idx, L_indptr):
     # We allow a maximum number of 10 sweeps per element,
     # and stop if the update becomes very small
     maxit = 5
-    convtol = abs(aij)*1e-3
+    convtol = abs(aij)*1e-2
     for _ in range(maxit):
 
         sum_lk = 0.0
