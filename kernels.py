@@ -35,8 +35,8 @@ def compile_all():
     y=np.ones(n,dtype='float64')
     a=numba.float64(1.0)
     b=numba.float64(1.0)
-    A1=scipy.sparse.csr_matrix(scipy.sparse.rand(n,n,0.6))
-    L =scipy.sparse.tril(A1)
+    A1=(scipy.sparse.rand(n,n,0.6) + scipy.sparse.eye(n,n)).tocsr()
+    L =scipy.sparse.tril(A1).tocsr()
     A2=sellcs.sellcs_matrix(A1, C=1, sigma=1)
 
     # compile GPU kernels:
@@ -284,7 +284,7 @@ def perf_report():
     print('--------\t-----\t---------------\t---------------\t---------------')
     print('kernel  \tcalls\t bw_estimate   \t t_meas        \t t_meas/call   ')
     print('========\t=====\t===============\t===============\t===============')
-    for kern in ('dot', 'axpby', 'spmv'):
+    for kern in ('dot', 'axpby', 'spmv', 'trsv'):
         if calls[kern]>0:
             t_tot += time[kern]
             total_calls += calls[kern]
