@@ -11,7 +11,9 @@ def get_argparser():
 
     For a full list, run your driver with the --help optino.
     '''
-    parser = ArgumentParser(description='Run a CG benchmark.')
+    parser = ArgumentParser(description='Run a CG benchmark.',
+                            formatter_class=RawTextHelpFormatter)
+
     parser.add_argument('-matfile', type=str, default='None',
                     help='MatrixMarket filename for matrix A')
     parser.add_argument('-matgen', type=str, default='None',
@@ -30,6 +32,10 @@ def get_argparser():
     parser.add_argument('-seed', type=int, default=None,
                     help='Random seed to make runs reproducible')
     parser.add_argument('-precon', type=str, default=None,
-                    help='Preconditioner to be used [None,Jacobi,SGS,IC0]')
+                    help='Preconditioner to be used [None,Jacobi,SGS,IC0,ILU0]\n'+
+                         'IC0 is an iterative zero-fill incomplete Cholesky factorization,\n'+
+                         'ILU0 is the cupyx.scipy equivalent,\n'+
+                         'Jacobi is simple diagonal scaling,\n'+
+                         ' and SGS is Symmetric Gauss-Seidel (which involves triangular solves)')
 
     return parser
