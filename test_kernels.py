@@ -25,7 +25,7 @@ def diff_norm(x, y):
     '''
     xh = to_host(x)
     yh = to_host(y)
-    return np.linalg.norm(xh-yh)
+    return np.linalg.norm(xh-yh)/(np.linalg.norm(xh)+np.linalg.norm(yh))
 
 
 def test_detect_cudasim():
@@ -52,7 +52,7 @@ class VectorKernelsTest(unittest.TestCase):
         self.y = to_device(self.y_host)
         self.z = to_device(self.z_host)
 
-        self.eps=1e-14
+        self.eps=np.finfo(np.float64).eps
 
     def test_init(self):
         init(self.x, self.a)
@@ -104,7 +104,7 @@ class SparseMatKernelsTest(unittest.TestCase):
     def setUp(self):
         self.A=scipy.sparse.csr_matrix(scipy.io.mmread('matrices/'+self.Matrix+'.mm.gz'))
         # add +1 to the diagonal because some test matrices may be singular
-        self.L = scipy.sparse.tril(self.A, format='csr') + scipy.sparse.eye(A.shape[0])
+        self.L = scipy.sparse.tril(self.A, format='csr') + scipy.sparse.eye(self.A.shape[0])
         self.n=self.A.shape[0]
         self.x_host=np.arange(self.n, dtype='float64')+1
         self.Ax=self.A@self.x_host
@@ -119,7 +119,7 @@ class SparseMatKernelsTest(unittest.TestCase):
         self.Lx = to_device(self.Lx)
         self.Ltx = to_device(self.Ltx)
 
-        self.eps=1e-11
+        self.eps=self.n*np.finfo(np.float64).eps
 
 
 
