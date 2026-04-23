@@ -15,7 +15,8 @@ def get_argparser():
     parser.add_argument('-matfile', type=str, default='None',
                     help='MatrixMarket filename for matrix A')
     parser.add_argument('-matgen', type=str, default='None',
-                    help='Matrix generator string  for matrix A (e.g., "Laplace128x64"')
+                    help='Matrix generator string  for matrix A. E.g., "Laplace128x64", '+
+                         '"Laplace50x50x50", or "LinElast100x50" (latter requires pyamg)')
     parser.add_argument('-maxit', type=int, default=1000,
                     help='Maximum number of CG iterations allowed.')
     parser.add_argument('-tol', type=float, default=1e-6,

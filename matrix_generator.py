@@ -12,6 +12,12 @@ import numpy as np
 from scipy.sparse import *
 import re
 
+try:
+    import pyamg
+except ImportError:
+    pyamg = None
+    warning("pyamg was not found, create_matrix will only be able to generate 'Laplace<nx>x<ny>'.")
+
 def parse_matstring(input):
     '''
     From an input like  'Laplace128x256',
@@ -47,9 +53,23 @@ def create_matrix(matstring, imbal=False):
         A=create_laplacian(nx,ny)
     elif label == 'Laplace':
         A=create_laplacian3d(nx,ny,nz)
+    elif pyamg is not None:
+        if label == 'LinElast':
+            if nz>1:
+                raise('LinElast<nx>x<ny> only available in 2D')
+            # linear elasticity stiffness matrix A (on a regular, quadrilateral mesh)
+            # B are the rigid-body modes (the nullspace of A), we ignore them but they
+            # could be used for preconditioning.
+            A, B = pyamg.gallery.linear_elasticity((nx, ny), format='csr')
+            A = csr_matrix(A)
+            # Could also use a triangular mesh:
+            #E2V,Vert = regular_triangle_mesh(nx, ny)
+            #A, B = pyamg.gallery.linear_elasticity_p1(Vert, E2V, format='csr')
+        else:
+            raise(ValueError('matgen string "'+label+'" not supported, only "Laplace" or "LinElast" are, right now.'))
     else:
         raise(ValueError('create_matrix can only build "Laplace<nx>x<ny>", "Laplace<nx>x<ny>x<nz>",  matrices up to now.'))
-    
+
     if(imbal==False):
         return A
     else:
