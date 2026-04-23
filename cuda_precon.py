@@ -91,7 +91,7 @@ def cu_ichol0(L_data, L_row_idx, L_col_idx, L_indptr):
     # We allow a maximum number of 10 sweeps per element,
     # and stop if the update becomes very small
     maxit = 20
-    convtol = 0.0 #abs(aij)*1e-3
+    convtol = abs(aij)*1e-3
     for _ in range(maxit):
 
         sum_lk = 0.0
