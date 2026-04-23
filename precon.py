@@ -13,7 +13,7 @@ import scipy
 from kernels import *
 
 from numba import cuda
-from cuda_precon import cu_ichol0, cu_invert
+from cuda_precon import *
 
 from cupy_kernels import as_cupy
 from cupyx.scipy.sparse.linalg import spilu
@@ -79,13 +79,19 @@ class IChol0:
         self.v_tmp = to_device(np.zeros(A.shape[0]))
         # Use the lower triangular factor of A as an initial guess:
         self.L = to_device(scipy.sparse.tril(A).tocsr())
-        L_coo = self.L.tocoo()
+        # our simple IC0 kernel requires the diagonal element to be stored as the
+        # last element in each row.
         data = self.L.cu_data
-        row_idx = to_device(L_coo.row)
         col_idx = self.L.cu_indices
+        row_idx = cuda.device_array_like(col_idx)
         indptr = self.L.cu_indptr
+        cu_ichol_pre.forall(self.shape[0])(data, indptr, row_idx, col_idx)
+        cuda.synchronize()
         cu_ichol0.forall(self.L.nnz)(data, row_idx, col_idx, indptr)
         cuda.synchronize()
+        # TROET
+        CholFactor = from_device(self.L)
+        scipy.io.mmwrite('CholFactor',CholFactor)
 
 
     def apply(self, w, v):
