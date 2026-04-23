@@ -242,7 +242,7 @@ def pcg_main():
 
     print('number of CG iterations: %d'%(iter))
     res = np.empty_like(x)
-    res = b - A@x
+    res = b - A_csr@x
     print('relative residual of computed solution: %e'%(norm(res)/norm(b)))
 
     if args.fmt=='SELL' and sigma>1:
