@@ -117,7 +117,7 @@ from scipy.sparse import *
 from scipy.io import mmread
 from sellcs import sellcs_matrix
 
-from precon import *
+import precon
 
 from matrix_generator import create_matrix
 from pels_args import *
@@ -196,6 +196,7 @@ def pcg_main():
 
     # take compilation time out of the balance:
     compile_all()
+    precon.compile_all()
 
     # we want to make sure what we measure during CG in total
     # is consistent with the sum of the kernel calls and their
@@ -207,21 +208,19 @@ def pcg_main():
     t0 = perf_counter()
 
     if args.precon is not None:
-        t0_pre = perf_counter()
         # setup preconditioner...
         if   args.precon == 'Jacobi' or args.precon == 'jacobi':
-            M = Jacobi(A_csr)
+            M = precon.Jacobi(A_csr)
         elif args.precon == 'SGS':
-            M = SymmetricGaussSeidel(A_csr)
+            M = precon.SymmetricGaussSeidel(A_csr)
         elif args.precon == 'IC0':
-            M = IChol0(A_csr)
+            M = precon.IChol0(A_csr)
         elif args.precon=='ILU0':
-            M = CuPyILU0(A_csr)
+            M = precon.CuPyILU0(A_csr)
         else:
             raise Exception("Unsupported parameter: -precon='"+args.precon+"'")
         if args.fmt == 'SELL' and A.sigma!=1:
             raise Exception("Preconditioning not implemented for SELL-C-simga format with sigma>1")
-        t1_pre = perf_counter()
 
     x_ex_in = None
     if args.printerr:
@@ -235,7 +234,6 @@ def pcg_main():
     t_CG = t1-t0
 
     if M is not None:
-        t_pre = t1_pre-t0_pre
         t_soln = t1_soln-t0_soln
 
     x = to_host(x)
@@ -255,7 +253,12 @@ def pcg_main():
 
     if M is not None:
         t_spmv = time['spmv']/calls['spmv']
-        print('Total time for constructing precon: %g seconds (%d spmvs).'%(t_pre, t_pre/t_spmv))
+        t_setup = precon.time['setup']
+        t_apply = precon.time['apply']
+        t_apply_per_call = t_apply / precon.calls['apply']
+        spmvs_per_apply = t_apply_per_call/t_spmv
+        print('Total time for constructing precon: %g seconds (%d spmvs).'%(t_setup, t_setup/t_spmv))
+        print('Total time for applying precon: %g seconds (%g spmvs/call).'%(t_apply, spmvs_per_apply))
         print('Total time for solving: %g seconds.'%(t_soln))
 
     print('Total time for CG: %g seconds.'%(t_CG))
