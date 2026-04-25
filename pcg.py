@@ -191,6 +191,7 @@ def pcg_main():
     M = None
 
     x0 = to_device(x0)
+    x_ex = to_device(x_ex)
     b  = to_device(b)
     A  = to_device(A)
 
