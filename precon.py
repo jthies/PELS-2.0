@@ -189,3 +189,24 @@ class CuPyILU0:
         t1 = perf_counter()
         calls['apply'] += 1
         time['apply'] += t1-t0
+
+import pyamg
+
+class PyAMG:
+
+    def __init__(self, A):
+        t0 = perf_counter()
+        self.A  = from_device(A)
+        self.AMG = pyamg.ruge_stuben_solver(self.A, max_coarse=20, max_levels=10)
+        self.M = self.AMG.aspreconditioner(cycle='V')
+        t1 = perf_counter()
+        calls['setup'] += 1
+        time['setup'] += t1-t0
+
+    def apply(self, w, v):
+        t0 = perf_counter()
+        v[:] = self.M@from_device(w)
+        t1 = perf_counter()
+        calls['apply'] += 1
+        time['apply'] += t1-t0
+

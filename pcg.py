@@ -218,6 +218,8 @@ def pcg_main():
             M = precon.IChol0(A_csr)
         elif args.precon=='ILU0':
             M = precon.CuPyILU0(A_csr)
+        elif args.precon=='AMG':
+            M = precon.PyAMG(A_csr)
         else:
             raise Exception("Unsupported parameter: -precon='"+args.precon+"'")
         if args.fmt == 'SELL' and A.sigma!=1:
