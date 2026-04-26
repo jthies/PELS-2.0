@@ -12,6 +12,17 @@ def d_swap(arr,i,j):
     arr[i] = arr[j]
     arr[j] = tmp
 
+@cuda.jit(device=True)
+def d_sort(val, idx, i0, i1):
+    '''
+    sort arrays (val[i0:i1], idx[i0:i1]) according to idx[i0:i1].
+    '''
+    for i in range(0,i1-i0):
+        for j in range(i0, i1 - i - 1):
+            if idx[j] > idx[j + 1]:
+                d_swap(val, j, j + 1)
+                d_swap(idx, j, j + 1)
+
 @cuda.jit
 def cu_invert(v: float64[:]):
     '''
@@ -25,7 +36,9 @@ def cu_invert(v: float64[:]):
 def cu_ichol_pre(data, indptr, row_ind, col_ind):
     '''
     Given a CSR matrix on the GPU, makes sure that
-    in every row the diagonal element is stoed as the last non-zero.
+    the column indices are sorted in every row.
+    If the matrix is lower triangular, this makes sure
+    that the diagonal element is stoed as the last non-zero.
     Simultaneously, places the row index of every element in row_ind,
     s.t. (data,row_inds,col_ind) is a COO representation of A.
 
@@ -37,17 +50,10 @@ def cu_ichol_pre(data, indptr, row_ind, col_ind):
         return
 
     first  = indptr[row]
-    last   = indptr[row+1]-1
-
-    for idx in range(first,last+1):
+    last   = indptr[row+1]
+    for idx in range(first,last):
         row_ind[idx] = row
-    if col_ind[last]==row:
-        return
-    for idx in range(last, first-1, -1):
-        if col_ind[idx] == row:
-            d_swap(col_ind, idx, last)
-            d_swap(data, idx, last)
-            break
+    d_sort(data, col_ind, first, last)
 
 @cuda.jit
 def cu_ichol0(L_data, L_row_idx, L_col_idx, L_indptr):
@@ -91,7 +97,7 @@ def cu_ichol0(L_data, L_row_idx, L_col_idx, L_indptr):
     # We allow a maximum number of 10 sweeps per element,
     # and stop if the update becomes very small
     maxit = 20
-    convtol = abs(aij)*1e-3
+    convtol = abs(aij)*1e-8
     for _ in range(maxit):
 
         sum_lk = 0.0
@@ -105,6 +111,7 @@ def cu_ichol0(L_data, L_row_idx, L_col_idx, L_indptr):
             k_j = L_col_idx[curr_j]
 
             # We can exploit that i>=j (we're only working on a lower triangular matrix).
+            # The j-loop never reaches diag_j, so k_i<=k_j<col_j
             if k_i >= col_j:
                 break
             if k_i == k_j:
@@ -127,5 +134,5 @@ def cu_ichol0(L_data, L_row_idx, L_col_idx, L_indptr):
             # Off-diagonal: L_ij = (a_ij - sum) / L_jj
             L_data[idx] = (aij - sum_lk) / L_data[diag_j]
 
-        if abs(L_ij_old-L_data[idx])<convtol:
-            break
+        #if abs(L_ij_old-L_data[idx])<convtol:
+        #    break

@@ -12,6 +12,7 @@ if [ ! -d $ENV ]; then
     pip install numba_cuda[cu13]
     pip install cupy
     pip install pytest parameterized
+    pip install pyamg
 else
     source ${ENV}/bin/activate
 fi;
