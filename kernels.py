@@ -272,7 +272,7 @@ def perf_report():
     device = cuda.get_current_device()
 
     # The 'name' attribute usually contains the model string (e.g., 'NVIDIA GeForce RTX 3080')
-    print('Hardware: '+device.name)
+    print('Hardware: '+str(device.name))
 
     # total measured time
     t_tot  = 0
