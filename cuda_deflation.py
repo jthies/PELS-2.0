@@ -19,8 +19,8 @@ import sellcs
 # CUDA kernels #
 ################
 @cuda.jit
-def cu_restrict(ipart: int32[:,:], part_size: int32[:], x: float[:], x_c: float[:]):
-    '''
+def cu_restrict(ipart: int32[:,:], part_size: int32[:], x: float64[:], x_c: float64[:]):
+    r'''
     Restrict vector x to coarse vector x_c.
 
     Input:   ipart[nparts, max(part_size)]: row-major 2D array s.t. ipart[i,j] is the j'th index in partition i.
@@ -71,8 +71,8 @@ def cu_restrict(ipart: int32[:,:], part_size: int32[:], x: float[:], x_c: float[
 
 
 @cuda.jit
-def cu_prolongate(part: int32[:], x_c: float[:], x: float[:]):
-    '''
+def cu_prolongate(part: int32[:], x_c: float64[:], x: float64[:]):
+    r'''
     Prolongate coarse vector x_c to vector x.
 
     Input:   part[N]: part[i] indicates to which partition (coarse index) a fine index belongs

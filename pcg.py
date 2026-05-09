@@ -118,6 +118,8 @@ from scipy.io import mmread
 from sellcs import sellcs_matrix
 
 import precon
+import deflation
+from deflation import DeflatedOperator
 
 from matrix_generator import create_matrix
 from pels_args import *
@@ -243,7 +245,7 @@ def pcg_main():
     t1 = perf_counter()
     if A_defl is None:
         x, relres, iter = cg_solve(A,M, b,x0,tol,maxit, x_ex=x_ex_in)
-      else:
+    else:
         xtil = clone(x)
         btil = clone(x)
         # solution component in the deflation space ('coarse solution')
@@ -254,7 +256,7 @@ def pcg_main():
         # iteratively compute the solution orthogonal to the deflation space
         xbar, relres, iter = cg_solve(A,M, btil,x0,tol,maxit, x_ex=x_ex_in)
         # add the two componenets
-        A_d.proj(xbar,x)
+        A_defl.proj(xbar,x)
         axpby(1.0, xtil, 1.0, x)
     t2 = perf_counter()
     t_CG = t2-t1
@@ -288,10 +290,11 @@ def pcg_main():
         print('Total time for applying precon: %g seconds (%g spmvs/call).'%(t_apply, spmvs_per_apply))
 
     if A_defl is not None:
+        t_setup_defl = deflation.time['setup']
         t_apply = deflation.time['apply']
         t_apply_per_call = t_apply / deflation.calls['apply']
         spmvs_per_apply = t_apply_per_call/t_spmv
-        print('Total time for constructing deflated operator: %g seconds (%d spmvs).'%(t_setup, t_setup/t_spmv))
+        print('Total time for constructing deflated operator: %g seconds (%d spmvs).'%(t_setup_defl, t_setup_defl/t_spmv))
         print('Total time for applying deflated operator: %g seconds (%g spmvs/call).'%(t_apply, spmvs_per_apply))
 
     if M is not None or A_defl is not None:
@@ -304,5 +307,3 @@ def pcg_main():
 
 if __name__ == '__main__':
     pcg_main()
-
-
