@@ -124,10 +124,6 @@ from pels_args import *
 
 def pcg_main():
 
-
-    ## **Note:** The Python garbage collector (gc)
-    ## can kill the performance of the C kernels
-    ## for some obscure reason (possibly a conflict
     parser = get_argparser()
 
     # add driver-specific command-line arguments for polynomial preconditioning with or without RACE:
@@ -178,6 +174,10 @@ def pcg_main():
     A_csr = A # we may need it for creating the preconditioner
               # in case the user wants a SELL-C-sigma matrix.
 
+    if args.deflate>0 and args.fmt != 'SELL':
+        print(f'Deflation requires SELL format (in our implementation), switching to SELL-{args.C}-{args.sigma}')
+        args.fmt='SELL'
+
     if args.fmt=='SELL':
         C=args.C
         sigma=args.sigma
@@ -198,16 +198,20 @@ def pcg_main():
     # take compilation time out of the balance:
     compile_all()
     precon.compile_all()
+    deflation.compile_all()
 
     # we want to make sure what we measure during CG in total
     # is consistent with the sum of the kernel calls and their
     # runtime as predicted by the roofline model, so reset all
     # counters and timers:
     reset_counters()
+    deflation.reset_counters()
 
-    M=None
     t0 = perf_counter()
 
+    M=None
+
+    # Construct (right) preconditioner (if requested)
     if args.precon is not None:
         # setup preconditioner...
         if   args.precon == 'Jacobi' or args.precon == 'jacobi':
@@ -225,19 +229,36 @@ def pcg_main():
         if args.fmt == 'SELL' and A.sigma!=1:
             raise Exception("Preconditioning not implemented for SELL-C-simga format with sigma>1")
 
+    # Construct deflated operator (if requested)
+    A_defl = None
+    if args.deflate > 0:
+        nparts = args.deflate
+        A_defl = DeflatedOperator(A_csr, A, nparts)
+
     x_ex_in = None
     if args.printerr:
         x_ex_in = x_ex
 
-    t0_soln = perf_counter()
-    x, relres, iter = cg_solve(A,M, b,x0,tol,maxit, x_ex=x_ex_in)
-    t1_soln = perf_counter()
 
     t1 = perf_counter()
-    t_CG = t1-t0
-
-    if M is not None:
-        t_soln = t1_soln-t0_soln
+    if A_defl is None:
+        x, relres, iter = cg_solve(A,M, b,x0,tol,maxit, x_ex=x_ex_in)
+      else:
+        xtil = clone(x)
+        btil = clone(x)
+        # solution component in the deflation space ('coarse solution')
+        A_defl.applyQ(b, xtil)
+        # 'deflated right-hand side', btil = b - A @ xtil
+        A.apply(xtil, btil)
+        axpby(1.0, b, -1.0, btil)
+        # iteratively compute the solution orthogonal to the deflation space
+        xbar, relres, iter = cg_solve(A,M, btil,x0,tol,maxit, x_ex=x_ex_in)
+        # add the two componenets
+        A_d.proj(xbar,x)
+        axpby(1.0, xtil, 1.0, x)
+    t2 = perf_counter()
+    t_CG = t2-t1
+    t_soln = t2 - t0
 
     x = to_host(x)
 
@@ -253,18 +274,35 @@ def pcg_main():
 
     print()
     perf_report()
+    if A_defl is not None:
+        deflation.perf_report()
+
+    t_spmv = time['spmv']/calls['spmv']
 
     if M is not None:
-        t_spmv = time['spmv']/calls['spmv']
         t_setup = precon.time['setup']
         t_apply = precon.time['apply']
         t_apply_per_call = t_apply / precon.calls['apply']
         spmvs_per_apply = t_apply_per_call/t_spmv
         print('Total time for constructing precon: %g seconds (%d spmvs).'%(t_setup, t_setup/t_spmv))
         print('Total time for applying precon: %g seconds (%g spmvs/call).'%(t_apply, spmvs_per_apply))
+
+    if A_defl is not None:
+        t_apply = deflation.time['apply']
+        t_apply_per_call = t_apply / deflation.calls['apply']
+        spmvs_per_apply = t_apply_per_call/t_spmv
+        print('Total time for constructing deflated operator: %g seconds (%d spmvs).'%(t_setup, t_setup/t_spmv))
+        print('Total time for applying deflated operator: %g seconds (%g spmvs/call).'%(t_apply, spmvs_per_apply))
+
+    if M is not None or A_defl is not None:
         print('Total time for solving: %g seconds.'%(t_soln))
 
     print('Total time for CG: %g seconds.'%(t_CG))
 
+
+
+
 if __name__ == '__main__':
     pcg_main()
+
+
