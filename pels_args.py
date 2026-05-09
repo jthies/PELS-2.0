@@ -25,12 +25,14 @@ def get_argparser():
                     help='Convergence criterion: ||b-A*x||_2/||b||_2<tol')
     parser.add_argument('-fmt', type=str, default='CSR',
                     help='Sparse matrix format to be used [CSR, SELL]')
-    parser.add_argument('-C', type=int, default=1,
+    parser.add_argument('-C', type=int, default=32,
                     help='Chunk size C for SELL-C-sigma format.')
     parser.add_argument('-sigma', type=int, default=1,
                     help='Sorting scope sigma for SELL-C-sigma format.')
     parser.add_argument('-seed', type=int, default=None,
                     help='Random seed to make runs reproducible')
+    parser.add_argument('-deflate', type=int, default=0,
+                    help='Use Deflation of k modes (yielding a k x k "coarse problem". Can be combined with preconditioning, or as an alternative.')
     parser.add_argument('-precon', type=str, default=None,
                     help='Preconditioner to be used [None,Jacobi,SGS,IC0,ILU0]\n'+
                          'IC0 is an iterative zero-fill incomplete Cholesky factorization,\n'+
