@@ -21,14 +21,19 @@ import sellcs
 @cuda.jit
 def cu_restrict(ipart: int32[:,:], part_size: int32[:], x: float64[:], x_c: float64[:]):
     r'''
-    Restrict vector x to coarse vector x_c.
+    Restrict vector x to coarse vector x_c using a weighted sum (average) over partitions.
+    Each thread block handles one partition.
 
-    Input:   ipart[nparts, max(part_size)]: row-major 2D array s.t. ipart[i,j] is the j'th index in partition i.
-             part_size[nparts]: number of indices in each partition.
-             X[N]: CUDA array representing a 'fine' vector to be 'coarsened'.
-    Output:  x_c[nparts], CUDA array with x_c[i] = (sum_{part==i} x)//part_size[i]
+    Args:
+        ipart (int32[:,:]): 2D array where ipart[i, j] is the j-th global index in partition i.
+                           Unused entries should be -1.
+        part_size (int32[:]): 1D array where part_size[i] is the number of elements in partition i.
+        x (float64[:]): Fine-level input vector on GPU.
+        x_c (float64[:]): Coarse-level output vector on GPU.
 
-    This kernel should be launched with at least nparts thread blocks of exactly 128 threads each.
+    Launch Configuration:
+        Blocks: nparts (one block per coarse element)
+        Threads: 128 (must match s_mem size)
     '''
     # Allocate shared memory for the reduction
     # Size should match the number of threads per block
@@ -53,7 +58,7 @@ def cu_restrict(ipart: int32[:,:], part_size: int32[:], x: float64[:], x_c: floa
     cuda.syncthreads()
 
     # 2. In-block reduction (Tree reduction)
-    # This assumes blockDim.x is a power of 2 (e.g., 256)
+    # This assumes blockDim.x is a power of 2 (e.g., 128)
     i = cuda.blockDim.x // 2
     while i > 0:
         if tid < i:
@@ -73,20 +78,37 @@ def cu_restrict(ipart: int32[:,:], part_size: int32[:], x: float64[:], x_c: floa
 @cuda.jit
 def cu_prolongate(part: int32[:], x_c: float64[:], x: float64[:]):
     r'''
-    Prolongate coarse vector x_c to vector x.
+    Prolongate coarse vector x_c to fine vector x by broadcasting coarse values to all
+    fine indices in the corresponding partition.
 
-    Input:   part[N]: part[i] indicates to which partition (coarse index) a fine index belongs
-             x_c[nparts], CUDA array with one element per partition
-    Output   x[N]: CUDA array representing a 'fine' vector
+    Args:
+        part (int32[:]): Mapping from fine index i to its partition ID.
+        x_c (float64[:]): Coarse-level input vector on GPU.
+        x (float64[:]): Fine-level output vector on GPU.
 
-    This kernel should be launched with at least N threads.
+    Launch Configuration:
+        Total threads should be at least N (fine vector size).
     '''
     idx = cuda.grid(1)
-    x[idx] = x_c[part[idx]]
+    if idx < x.size:
+        x[idx] = x_c[part[idx]]
 
 
 @cuda.jit
 def cu_csr_project_atomic(values, col_indices, row_ptr, row_map, col_map, consts, C):
+    r'''
+    Compute a weighted projection of a CSR matrix into a dense matrix C using atomic additions.
+    This is used for constructing the coarse-grid operator E = V^T A V.
+
+    Args:
+        values (float64[:]): CSR matrix data.
+        col_indices (int32[:]): CSR column indices.
+        row_ptr (int32[:]): CSR row pointers.
+        row_map (int32[:]): Mapping from CSR row to dense row in C (-1 if excluded).
+        col_map (int32[:]): Mapping from CSR column to dense column in C (-1 if excluded).
+        consts (float64[:]): Weights for each target row/column (e.g., 1/n_members).
+        C (float64[:,:]): Dense output matrix on GPU.
+    '''
     row_idx = cuda.grid(1)
     
     if row_idx < row_ptr.shape[0] - 1:
@@ -112,5 +134,3 @@ def cu_csr_project_atomic(values, col_indices, row_ptr, row_map, col_map, consts
             # contribute to the same C[target_row, target_col]
             contribution = val * c_i * c_l
             cuda.atomic.add(C, (target_row, target_col), contribution)
-
-
