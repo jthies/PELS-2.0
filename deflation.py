@@ -12,11 +12,11 @@ import numpy as np
 import scipy
 import scipy.sparse.linalg as spla
 from time import perf_counter
-from numba import cuda, jit
+from numba import cuda, jit, int32, float64
 import pymetis
 
-from kernels import to_device, clone, axpby, spmv
-from cuda_deflation import cu_restrict, cu_prolongate
+from kernels import to_device, from_device, clone, axpby, spmv
+from cuda_deflation import cu_restrict, cu_prolongate, cu_sell_restrict
 
 from sellcs import sellcs_matrix
 
@@ -80,26 +80,29 @@ def partition_csr_matrix(A_csr, nparts):
     return np.array(part, dtype='int32')
 
 @jit(nopython=True)
-def invert_partitioning(nparts, part):
+def invert_partitioning(nparts: int32, part: int32[:]) -> (int32[:], int32[:]):
     r'''
-    if part contains integers in the range 0 to nparts-1, inclusive,
-    creates a column-major 2D array ipart[npart, max_i(part==i)] s.t.
-    ipart[p, j] == i <-> part[i] = p and count(part[0:i]==p)=j.
+    ipart, nmembers = invert_partitioning(nparts, part)
+
+    If part contains integers in the range 0 to nparts-1, inclusive,
+    creates a row-major 2D array ipart[npart, max_i(part==i)] s.t.
+    ipart[p, j] == i <-> part[i] == p and count(part[0:i]==p)=j.
     The second array returned indicates the actual number of global indicesj assigned to partition
     p, nmembers[p]<=ipart.shape[1]. Elements ipart[p,nmembers[p]:] are invalid (undefined).
     '''
     N = part.size
     # First count the partition sizes
-    nmembers=np.zeros(nparts,dtype='int32')
+    nmembers = np.zeros(nparts,dtype='int32')
     for i in range(N):
         nmembers[part[i]] += 1
     # Then construct the inverse mapping per partition:
-    ipart = -np.ones(nparts, np.max(nmembers), dtype='int32')
+    max_k = np.max(nmembers)
+    ipart = -np.ones((nparts, max_k), dtype='int32')
     nmembers[:] = 0
 
-    for p in range(N):
+    for i in range(N):
         pi = part[i]
-        ni = nmembers[i]
+        ni = nmembers[pi]
         ipart[pi, ni] = i
         nmembers[pi] += 1
     return ipart, nmembers
@@ -121,30 +124,44 @@ class DeflatedOperator:
             nc (int): Number of coarse partitions (size of coarse problem).
         '''
         t0 = perf_counter()
-        if type(A_csr) is not scipy.sparse.csr_matrix or type(A_gpu) is not sellcs_matrix:
-            raise Exception('DeflatedOperator requires a CSR (host) and SELL-C-sigma (device) matrix')
+        if (type(A_csr) is not scipy.sparse.csr_matrix or
+            type(A_gpu) is not sellcs_matrix or
+            hasattr(A_gpu, 'cu_data') == False):
+            raise Exception(f'DeflatedOperator requires a CSR (host) and SELL-C-sigma (device) matrix.\n'+
+                            f'Found A_csr[{type(A_csr)}] and A_gpu[{type(A_gpu)}].')
+        self.shape = A_csr.shape
+        self.dtype = A_csr.dtype
         self.A = A_gpu
-        self.nc = nc
+        self.nparts = nc
         self.n = A_csr.shape[0]
 
         # 1. Partitioning using METIS
         self.part = partition_csr_matrix(A_csr, nc)
-        self.cu_part = cuda.to_device(self.part)
+        self.cu_part = to_device(self.part)
 
-        # determine the size of each partition
+        #print('part:')
+        #for i in range(self.n):
+        #    print(f'{i}\t{self.part[i]}')
+
+        # determine the size of each partition and the inverse mapping 'ipart'
         self.ipart, self.nmembers = invert_partitioning(self.nparts, self.part)
+
         self.cu_ipart = to_device(self.ipart)
         self.cu_nmembers = to_device(self.nmembers)
 
-        self.valV = 1.0/dble(nmembers[self.part])
+        self.valV = 1.0/self.nmembers.astype(np.float64)
         self.cu_valV = to_device(self.valV)
+
+        print('TROET')
+        print(self.valV)
 
         nchunks = len(self.A.indptr)-1
         C = self.A.C
+        n = self.A.shape[0]
 
-        self.cu_A_c = numba.device_array((self.nc, self.nc), dtype=self.dtype)
+        self.cu_A_c = cuda.device_array((self.nparts, self.nparts), dtype=self.dtype)
 
-        cu_sell_restrict[nchunks, C](self.A.cu_values, self.A.cu_indptr, self.A.cu_indices, n, 
+        cu_sell_restrict[nchunks, C](self.A.cu_data, self.A.cu_indptr, self.A.cu_indices, n, 
                                      self.cu_part, self.cu_valV,self.cu_A_c)
         cuda.synchronize()
 
@@ -163,10 +180,10 @@ class DeflatedOperator:
         with Q = V(V'AV)\V'
         '''
         # coarsen ("restrict"): x_c = V^T@x
-        x_c = cuda.device_array((nc,),dtype='float64')
+        x_c = cuda.device_array((self.nparts,),dtype='float64')
         threadsperblock = 128
-        blockspergrid = self.nc
-        cu_restrict[blockspergrid, threadsperblock](self.cu_ipart, self.cu_part_size, x, x_c)
+        blockspergrid = self.nparts
+        cu_restrict[blockspergrid, threadsperblock](self.cu_ipart, self.cu_nmembers, self.cu_valV, x, x_c)
 
         # solve the projected linear system, y_c = (V^TAV) \ x_c
         y_c = np.linalg.solve(self.L_c.T, np.linalg.solve(self.L_c, from_device(x_c)))
@@ -174,7 +191,7 @@ class DeflatedOperator:
         # interpolate y = V*y_c
         threadsperblock = 256
         blockspergrid = (self.n + threadsperblock - 1) // threadsperblock
-        cu_prolongate[blockspergrid, threadsperblock](self.cu_part, to_device(y_c), y)
+        cu_prolongate[blockspergrid, threadsperblock](self.cu_part, self.valV, to_device(y_c), y)
 
     def proj(self, x, y, tmp):
         r'''

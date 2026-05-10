@@ -11,11 +11,25 @@
 import unittest
 import pytest
 import numpy as np
+from numpy.linalg import norm
 import scipy.sparse
-from kernels import to_device, to_host, clone, available_gpus
+from kernels import to_device, to_host, clone, available_gpus, spmv
 from deflation import DeflatedOperator, partition_csr_matrix
 from matrix_generator import create_matrix
 from sellcs import sellcs_matrix
+
+from test_kernels import diff_norm
+
+
+def build_numpy_V(A_defl):
+        n = A_defl.shape[0]
+        nc = A_defl.nparts
+        V = np.zeros((n, nc),dtype='float64')
+        for i in range(n):
+            V[i,A_defl.part[i]] = 1.0
+        nmembers = np.sum(V, axis=0, dtype='int32')
+        V = V @ np.diag(1.0/nmembers.astype('float64'))
+        return V
 
 class DeflationTest(unittest.TestCase):
 
@@ -24,16 +38,20 @@ class DeflationTest(unittest.TestCase):
         self.n = 200
         self.nc = 10
         # Create a simple 1D Laplace matrix
-        self.A_csr = scipy.sparse.diags([[-1]*(self.n-1), [2]*self.n, [-1]*(self.n-1)], [-1, 0, 1]).tocsr()
-        self.A_gpu = to_device(sellcs_matrix(self.A_csr))
-        
+        self.A_csr = scipy.sparse.diags([[-1.0]*(self.n-1), [2.0]*self.n, [-1.0]*(self.n-1)], [-1, 0, 1]).tocsr()
+        self.A_gpu = to_device(sellcs_matrix(self.A_csr, C=32, sigma=1))
+
         # Exact solution and RHS
         self.x_ex = np.random.rand(self.n)
         self.b_gpu = to_device(self.A_csr @ self.x_ex)
-        
+        self.v_tmp = clone(self.b_gpu)
+
         # Deflated Operator
         self.A_defl = DeflatedOperator(self.A_csr, self.A_gpu, self.nc)
-        
+
+        # explicitly build the V operator using numpy
+        self.V = build_numpy_V(self.A_defl)
+
         self.eps = 1e-12
 
     def test_partitioning(self):
@@ -49,15 +67,15 @@ class DeflationTest(unittest.TestCase):
         x = to_device(np.random.rand(self.n))
         y = clone(x)
         self.A_defl.applyQ(x, y)
-        
+
         y_host = to_host(y)
         x_host = to_host(x)
-        
+
         # V' A y should match V' x
-        lhs = self.A_defl.V.T @ (self.A_csr @ y_host)
-        rhs = self.A_defl.V.T @ x_host
-        
-        error = np.linalg.norm(lhs - rhs) / np.linalg.norm(rhs)
+        lhs = self.V.T @ (self.A_csr @ y_host)
+        rhs = self.V.T @ x_host
+
+        error = diff_norm(lhs, rhs)
         assert error < self.eps
 
     def test_applyQ_idempotent(self):
@@ -66,33 +84,32 @@ class DeflationTest(unittest.TestCase):
         y1 = clone(x)
         y2 = clone(x)
         temp = clone(x)
-        
+
         # y1 = Q x
         self.A_defl.applyQ(x, y1)
-        
+
         # temp = A (Q x)
-        import kernels
-        kernels.spmv(self.A_gpu, y1, temp)
-        
+        spmv(self.A_gpu, y1, temp)
+
         # y2 = Q (A Q x)
         self.A_defl.applyQ(temp, y2)
-        
-        error = np.linalg.norm(to_host(y1) - to_host(y2)) / np.linalg.norm(to_host(y1))
+
+        error = diff_norm(y1, y2)
         assert error < self.eps
 
     def test_proj_orthogonality(self):
         ''' Test that P = I - QA satisfies V' A P = 0 '''
         x = to_device(np.random.rand(self.n))
         y = clone(x)
-        
+
         # y = (I - QA) x
-        self.A_defl.proj(x, y)
-        
+        self.A_defl.proj(x, y, self.v_tmp)
+
         y_host = to_host(y)
-        
+
         # V' A y should be zero
-        res = self.A_defl.V.T @ (self.A_csr @ y_host)
-        error = np.linalg.norm(res) / np.linalg.norm(to_host(x))
+        res = self.V.T @ (self.A_csr @ y_host)
+        error = norm(res) / norm(to_host(x))
         assert error < self.eps
 
     def test_proj_idempotent(self):
@@ -100,34 +117,38 @@ class DeflationTest(unittest.TestCase):
         x = to_device(np.random.rand(self.n))
         y1 = clone(x)
         y2 = clone(x)
-        
+
         # y1 = P x
-        self.A_defl.proj(x, y1)
-        
+        self.A_defl.proj(x, y1, self.v_tmp)
+
         # y2 = P (P x)
-        self.A_defl.proj(y1, y2)
-        
-        error = np.linalg.norm(to_host(y1) - to_host(y2)) / np.linalg.norm(to_host(y1))
+        self.A_defl.proj(y1, y2, self.v_tmp)
+
+        error = diff_norm(y1,y2)
         assert error < self.eps
 
-@pytest.mark.parametrize('Matrix', ['Ddiag13', 'Dtest33'])
+@pytest.mark.parametrize('Matrix', ['Ddiag13', 'Dsprandn388'])
 def test_deflation_parametrized(Matrix):
     import scipy.io
     A_csr = scipy.sparse.csr_matrix(scipy.io.mmread('matrices/'+Matrix+'.mm.gz'))
     n = A_csr.shape[0]
     nc = min(n // 2, 5) # Small nc for small matrices
-    
-    A_gpu = to_device(A_csr)
+
+    A_sell = sellcs_matrix(A_csr, C=32, sigma=1)
+
+    A_gpu = to_device(A_sell)
     A_defl = DeflatedOperator(A_csr, A_gpu, nc)
-    
+    V = build_numpy_V(A_defl)
+
     x = to_device(np.random.rand(n))
     y = clone(x)
-    A_defl.proj(x, y)
-    
+    v_tmp = clone(x)
+    A_defl.proj(x, y, v_tmp)
+
     # Orthogonality check: V' A P x = 0
     y_host = to_host(y)
-    res = A_defl.V.T @ (A_csr @ y_host)
-    assert np.linalg.norm(res) / np.linalg.norm(to_host(x)) < 1e-10
+    res = V.T @ (A_csr @ y_host)
+    assert norm(res) / norm(to_host(x)) < 1e-10
 
 if __name__ == '__main__':
     unittest.main()

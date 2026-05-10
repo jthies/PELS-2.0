@@ -19,7 +19,7 @@ import sellcs
 # CUDA kernels #
 ################
 @cuda.jit
-def cu_restrict(ipart: int32[:,:], part_size: int32[:], x: float64[:], x_c: float64[:]):
+def cu_restrict(ipart: int32[:,:], part_size: int32[:], valV: float64[:], x: float64[:], x_c: float64[:]):
     r'''
     Restrict vector x to coarse vector x_c using a weighted sum (average) over partitions.
     Each thread block handles one partition.
@@ -28,6 +28,7 @@ def cu_restrict(ipart: int32[:,:], part_size: int32[:], x: float64[:], x_c: floa
         ipart (int32[:,:]): 2D array where ipart[i, j] is the j-th global index in partition i.
                            Unused entries should be -1.
         part_size (int32[:]): 1D array where part_size[i] is the number of elements in partition i.
+        valV: float64[:]: weights (entries of V), in our case actually 1.0/part_size
         x (float64[:]): Fine-level input vector on GPU.
         x_c (float64[:]): Coarse-level output vector on GPU.
 
@@ -52,7 +53,7 @@ def cu_restrict(ipart: int32[:,:], part_size: int32[:], x: float64[:], x_c: floa
     local_sum = 0.0
     for j in range(tid, n_elements, stride):
         idx = ipart[part_idx, j]
-        local_sum += x[idx]
+        local_sum += x[idx]*valV[idx]
 
     s_mem[tid] = local_sum
     cuda.syncthreads()
@@ -76,13 +77,14 @@ def cu_restrict(ipart: int32[:,:], part_size: int32[:], x: float64[:], x_c: floa
 
 
 @cuda.jit
-def cu_prolongate(part: int32[:], x_c: float64[:], x: float64[:]):
+def cu_prolongate(part: int32[:], valV: float64[:], x_c: float64[:], x: float64[:]):
     r'''
     Prolongate coarse vector x_c to fine vector x by broadcasting coarse values to all
     fine indices in the corresponding partition.
 
     Args:
         part (int32[:]): Mapping from fine index i to its partition ID.
+        valV (float64[:]) Weight per partition (V[i,p] is valV[p] for partition p, and 0 otherwise)
         x_c (float64[:]): Coarse-level input vector on GPU.
         x (float64[:]): Fine-level output vector on GPU.
 
@@ -91,7 +93,8 @@ def cu_prolongate(part: int32[:], x_c: float64[:], x: float64[:]):
     '''
     idx = cuda.grid(1)
     if idx < x.size:
-        x[idx] = x_c[part[idx]]
+        p = part[idx]
+        x[idx] = x_c[p]*valV[p]
 
 
 @cuda.jit
@@ -121,7 +124,7 @@ def cu_sell_restrict(valA: float64[:], cptrA: int32[:], colA: int32[:], N: int32
     if row >= N:
         return
 
-    c = min(C,nrows-cx*C) # actual chunk height
+    c = min(C,N-cx*C) # actual chunk height
     w    = (cptrA[cx+1] - cptrA[cx]) // c
 
     p_i = part[row]
