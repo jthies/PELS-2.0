@@ -128,7 +128,7 @@ class DeflatedOperator:
         self.n = A_csr.shape[0]
 
         # 1. Partitioning using METIS
-        self.part = partition_sparse_matrix(A_csr, nc)
+        self.part = partition_csr_matrix(A_csr, nc)
         self.cu_part = cuda.to_device(self.part)
 
         # determine the size of each partition

@@ -15,6 +15,7 @@ import scipy.sparse
 from kernels import to_device, to_host, clone, available_gpus
 from deflation import DeflatedOperator, partition_csr_matrix
 from matrix_generator import create_matrix
+from sellcs import sellcs_matrix
 
 class DeflationTest(unittest.TestCase):
 
@@ -24,7 +25,7 @@ class DeflationTest(unittest.TestCase):
         self.nc = 10
         # Create a simple 1D Laplace matrix
         self.A_csr = scipy.sparse.diags([[-1]*(self.n-1), [2]*self.n, [-1]*(self.n-1)], [-1, 0, 1]).tocsr()
-        self.A_gpu = to_device(self.A_csr)
+        self.A_gpu = to_device(sellcs_matrix(self.A_csr))
         
         # Exact solution and RHS
         self.x_ex = np.random.rand(self.n)
