@@ -21,7 +21,7 @@ from cupyx.scipy.sparse.linalg import spilu
 def compile_all():
     n=10
     x=to_device(np.ones(n,dtype='float64'))
-    cu_invert.forall(n)(x)
+    cu_invert_inplace.forall(n)(x)
 
     A =(scipy.sparse.rand(n,n,0.6) + scipy.sparse.eye(n,n)).tocsr()
     L =to_device(scipy.sparse.tril(A).tocsr())
@@ -42,7 +42,7 @@ class Jacobi:
     def __init__(self, A):
         t0 = perf_counter()
         self.D_inv = to_device(A.diagonal())
-        cu_invert.forall(self.D_inv.size)(self.D_inv)
+        cu_invert_inplace.forall(self.D_inv.size)(self.D_inv)
         cuda.synchronize()
         t1 = perf_counter()
         calls['setup'] += 1
@@ -197,7 +197,7 @@ class PyAMG:
     def __init__(self, A):
         t0 = perf_counter()
         self.A  = from_device(A)
-        self.AMG = pyamg.ruge_stuben_solver(self.A, max_coarse=20, max_levels=10)
+        self.AMG = pyamg.smoothed_aggregation_solver(self.A, max_coarse=20, max_levels=10)
         self.M = self.AMG.aspreconditioner(cycle='V')
         t1 = perf_counter()
         calls['setup'] += 1

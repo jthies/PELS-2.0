@@ -95,42 +95,41 @@ def cu_prolongate(part: int32[:], x_c: float64[:], x: float64[:]):
 
 
 @cuda.jit
-def cu_csr_project_atomic(values, col_indices, row_ptr, row_map, col_map, consts, C):
+def cu_sell_restrict(valA: float64[:], cptrA: int32[:], colA: int32[:], N: int32,
+                    part: int32[:], valV: float64[:],
+                    A_c: float64[:,:]):
     r'''
     Compute a weighted projection of a CSR matrix into a dense matrix C using atomic additions.
     This is used for constructing the coarse-grid operator E = V^T A V.
 
     Args:
-        values (float64[:]): CSR matrix data.
-        col_indices (int32[:]): CSR column indices.
-        row_ptr (int32[:]): CSR row pointers.
-        row_map (int32[:]): Mapping from CSR row to dense row in C (-1 if excluded).
-        col_map (int32[:]): Mapping from CSR column to dense column in C (-1 if excluded).
-        consts (float64[:]): Weights for each target row/column (e.g., 1/n_members).
-        C (float64[:,:]): Dense output matrix on GPU.
+        valA (float64[:]): SELL matrix entries (A.data).
+        cptr (int32[:]): SELL chunk pointers (A.indptr).
+        colA (int32[:]): CSR column indices (A.indices).
+        N (int32): Number of rows of A (A.shape[0])
+        part (int32[0:N]): Mapping from row index in A to coarse row in A_c.
+        valV (float64[0:A_c.shape[0]]): Weights for each partition (coarse index) (e.g., 1/nmembers).
+        A_c (float64[:,:]): Dense square output matrix on GPU with A_c.shape[0] the number of coarse variables
+        (e.g., partitions).
     '''
-    row_idx = cuda.grid(1)
-    
-    if row_idx < row_ptr.shape[0] - 1:
-        # Determine which row of C this row of A maps to
-        target_row = row_map[row_idx]
-        if target_row == -1: return # Skip if row not in deflation space
-        
-        c_i = consts[target_row]
-        
-        # Iterate over non-zeros in CSR row
-        for nz_idx in range(row_ptr[row_idx], row_ptr[row_idx + 1]):
-            col_idx = col_indices[nz_idx]
-            val = values[nz_idx]
-            
-            # Determine which column of C this entry maps to
-            target_col = col_map[col_idx]
-            if target_col == -1: continue
-            
-            c_l = consts[target_col]
-            
-            # Weighted contribution to the dense matrix
-            # Note: AtomicAdd is necessary because multiple threads 
-            # contribute to the same C[target_row, target_col]
-            contribution = val * c_i * c_l
-            cuda.atomic.add(C, (target_row, target_col), contribution)
+    tx    = cuda.threadIdx.x # thread index in block (chunk)
+    C  = cuda.blockDim.x     # we assume the block size has been chosen to match the chunk size C
+    cx = cuda.blockIdx.x     # chunk index into the SELL-C matrix
+
+    row = cx*C+tx
+
+    if row >= N:
+        return
+
+    c = min(C,nrows-cx*C) # actual chunk height
+    w    = (cptrA[cx+1] - cptrA[cx]) // c
+
+    p_i = part[row]
+    v_i = valV[p_i]
+    pos = cptrA[cx] + tx
+    for j in range(w):
+        p_j = part[colA[pos]]
+        v_j = valV[p_j]
+        val = v_i*valA[pos]*v_j
+        cuda.atomic.add(A_c, (p_i, p_j), val)
+        pos += c

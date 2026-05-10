@@ -12,11 +12,13 @@ import numpy as np
 import scipy
 import scipy.sparse.linalg as spla
 from time import perf_counter
-from numba import cuda
+from numba import cuda, jit
 import pymetis
 
 from kernels import to_device, clone, axpby, spmv
 from cuda_deflation import cu_restrict, cu_prolongate
+
+from sellcs import sellcs_matrix
 
 # total number of calls
 calls = {'setup': 0, 'apply': 0}
@@ -24,20 +26,20 @@ calls = {'setup': 0, 'apply': 0}
 time = {'setup': 0, 'apply': 0.0}
 
 def reset_counters():
-    ''' Reset performance counters for deflation setup and application. '''
+    r''' Reset performance counters for deflation setup and application. '''
     calls['setup'] = 0
     calls['apply'] = 0
     time['setup'] = 0.0
     time['apply'] = 0.0
 
 def perf_report():
-    ''' Print a performance report for the deflation operator. '''
+    r''' Print a performance report for the deflation operator. '''
     print('Deflation report:')
     print('  setup calls: %d, time: %10.4g s'%(calls['setup'], time['setup']))
     print('  apply calls: %d, time: %10.4g s'%(calls['apply'], time['apply']))
 
 def compile_all():
-    ''' 
+    r''' 
     Pre-compile JIT kernels and class methods by running a small problem. 
     This removes compilation overhead from subsequent benchmark runs.
     '''
@@ -54,46 +56,74 @@ def compile_all():
     A_defl.proj(x, y)
     reset_counters()
 
-def partition_sparse_matrix(matrix, nparts):
-    '''
+def partition_csr_matrix(A_csr, nparts):
+    r'''
     Partition a sparse matrix's graph into nparts using METIS.
 
     Args:
-        matrix: A scipy.sparse.csr_matrix.
+        A_csr: A scipy.sparse.csr_matrix.
         nparts (int): Number of partitions.
 
     Returns:
         np.array (int32): Partition ID for each row/node.
     '''
-    # Extract adjacency info from CSR format
+    # Metis wants a "list of lists" of column indices,
+    # so we construct it from the CSR format:
     adjacency_list = [
-        matrix.indices[matrix.indptr[i] : matrix.indptr[i+1]]
-        for i in range(matrix.shape[0])
+        A_csr.indices[A_csr.indptr[i] : A_csr.indptr[i+1]]
+        for i in range(A_csr.shape[0])
     ]
 
-    # Perform the partition
+    # Perform the partitioning
+    # ncuts is the number of edges that span across different partitions
     ncuts, part = pymetis.part_graph(nparts, adjacency=adjacency_list)
-
     return np.array(part, dtype='int32')
 
-class DeflatedOperator:
+@jit(nopython=True)
+def invert_partitioning(nparts, part):
+    r'''
+    if part contains integers in the range 0 to nparts-1, inclusive,
+    creates a column-major 2D array ipart[npart, max_i(part==i)] s.t.
+    ipart[p, j] == i <-> part[i] = p and count(part[0:i]==p)=j.
+    The second array returned indicates the actual number of global indicesj assigned to partition
+    p, nmembers[p]<=ipart.shape[1]. Elements ipart[p,nmembers[p]:] are invalid (undefined).
     '''
+    N = part.size
+    # First count the partition sizes
+    nmembers=np.zeros(nparts,dtype='int32')
+    for i in range(N):
+        nmembers[part[i]] += 1
+    # Then construct the inverse mapping per partition:
+    ipart = -np.ones(nparts, np.max(nmembers), dtype='int32')
+    nmembers[:] = 0
+
+    for p in range(N):
+        pi = part[i]
+        ni = nmembers[i]
+        ipart[pi, ni] = i
+        nmembers[pi] += 1
+    return ipart, nmembers
+
+class DeflatedOperator:
+    r'''
     Implements the Deflated Conjugate Gradient (DPCG) operator.
     The subspace is defined by a partition of the domain (coarse grid).
     Q = V (V^T A V)^{-1} V^T is the projection into the deflation space.
     '''
     def __init__(self, A_csr, A_gpu, nc):
-        '''
+        r'''
         Initialize the deflated operator by partitioning the matrix and 
         factorizing the coarse-grid operator E = V^T A V.
 
         Args:
             A_csr (scipy.sparse.csr_matrix): System matrix on CPU for setup.
-            A_gpu: System matrix on GPU for projection operations.
+            A_gpu: System matrix on GPU for projection operations (must be SELL-C-sigma i.e. sellcs_matrix).
             nc (int): Number of coarse partitions (size of coarse problem).
         '''
         t0 = perf_counter()
-        self.A_gpu = A_gpu
+        if type(A_csr) is not scipy.sparse.csr_matrix or type(A_gpu) is not sellcs_matrix:
+            raise Exception('DeflatedOperator requires a CSR (host) and SELL-C-sigma (device) matrix')
+        self.A = A_gpu
         self.nc = nc
         self.n = A_csr.shape[0]
 
@@ -101,90 +131,93 @@ class DeflatedOperator:
         self.part = partition_sparse_matrix(A_csr, nc)
         self.cu_part = cuda.to_device(self.part)
 
-        # 2. Prepare ipart and part_size for GPU restriction (cu_restrict)
-        # ipart[nc, max_part_size] maps partition ID and local index to global index.
-        p, n_members = np.unique(self.part, return_counts=True)
+        # determine the size of each partition
+        self.ipart, self.nmembers = invert_partitioning(self.nparts, self.part)
+        self.cu_ipart = to_device(self.ipart)
+        self.cu_nmembers = to_device(self.nmembers)
 
-        full_n_members = np.zeros(nc, dtype='int32')
-        full_n_members[p] = n_members.astype('int32')
-        n_members = full_n_members
+        self.valV = 1.0/dble(nmembers[self.part])
+        self.cu_valV = to_device(self.valV)
 
-        max_part_size = np.max(n_members)
-        self.part_size = n_members.astype('int32')
-        self.cu_part_size = cuda.to_device(self.part_size)
+        nchunks = len(self.A.indptr)-1
+        C = self.A.C
 
-        self.ipart = np.full((nc, max_part_size), -1, dtype='int32')
-        counters = np.zeros(nc, dtype='int32')
-        for i, p_id in enumerate(self.part):
-            self.ipart[p_id, counters[p_id]] = i
-            counters[p_id] += 1
-        self.cu_ipart = cuda.to_device(self.ipart)
+        self.cu_A_c = numba.device_array((self.nc, self.nc), dtype=self.dtype)
 
-        # 3. Construct Coarse matrix E = V^T A V on CPU
-        # V is n x nc, V[i, p] = 1/n_members[p] if part[i] == p.
-        rows = np.arange(self.n)
-        cols = self.part
-        safe_n_members = np.where(n_members == 0, 1, n_members)
-        vals = 1.0 / safe_n_members[self.part]
-        V = scipy.sparse.csc_matrix((vals, (rows, cols)), shape=(self.n, nc))
-        self.V = V # Save for debug if needed
-        self.E = V.T @ (A_csr @ V)
+        cu_sell_restrict[nchunks, C](self.A.cu_values, self.A.cu_indptr, self.A.cu_indices, n, 
+                                     self.cu_part, self.cu_valV,self.cu_A_c)
+        cuda.synchronize()
 
-        # 4. Factorize E on CPU using SuperLU
-        self.Elu = spla.splu(self.E)
+        self.A_c = from_device(self.cu_A_c)
 
-        # 5. Allocate buffers for restriction/prolongation on GPU
-        self.q_c = cuda.device_array(nc, dtype='float64')
-        self.y_c_gpu = cuda.device_array(nc, dtype='float64')
+        self.L_c = np.linalg.cholesky(self.A_c)
 
         t1 = perf_counter()
-        calls['setup'] += 1
+
         time['setup'] += t1 - t0
+        calls['setup'] += 1
 
     def applyQ(self, x, y):
-        r''' 
-        Compute y = Q*x = V (V^T A V)^{-1} V^T x.
-
-        Args:
-            x: Input vector on GPU.
-            y: Output vector on GPU.
+        r'''
+        computes y = Q*x
+        with Q = V(V'AV)\V'
         '''
-        t0 = perf_counter()
-
-        # 1. Restriction: q_c = V' x (Weighted sum per partition)
+        # coarsen ("restrict"): x_c = V^T@x
+        x_c = cuda.device_array((nc,),dtype='float64')
         threadsperblock = 128
         blockspergrid = self.nc
-        cu_restrict[blockspergrid, threadsperblock](self.cu_ipart, self.cu_part_size, x, self.q_c)
+        cu_restrict[blockspergrid, threadsperblock](self.cu_ipart, self.cu_part_size, x, x_c)
 
-        # 2. Coarse solve on CPU
-        q_c_host = self.q_c.copy_to_host()
-        y_c_host = self.Elu.solve(q_c_host)
-        self.y_c_gpu.copy_to_device(y_c_host)
+        # solve the projected linear system, y_c = (V^TAV) \ x_c
+        y_c = np.linalg.solve(self.L_c.T, np.linalg.solve(self.L_c, from_device(x_c)))
 
-        # 3. Prolongation: y = V y_c (Broadcast coarse values)
+        # interpolate y = V*y_c
         threadsperblock = 256
         blockspergrid = (self.n + threadsperblock - 1) // threadsperblock
-        cu_prolongate[blockspergrid, threadsperblock](self.cu_part, self.y_c_gpu, y)
+        cu_prolongate[blockspergrid, threadsperblock](self.cu_part, to_device(y_c), y)
 
-        cuda.synchronize()
-        t1 = perf_counter()
-        calls['apply'] += 1
-        time['apply'] += t1 - t0
-
-    def proj(self, x, y):
-        r''' 
+    def proj(self, x, y, tmp):
+        r'''
         Compute the projection orthogonal to the deflation space: y = (I - QA)x.
 
         Args:
             x: Input vector on GPU.
             y: Output vector on GPU.
+            tmp: a temporary work vector of the same type and length as x, y
         '''
         # We need a temporary for A@x
-        tmp = clone(x)
-        spmv(self.A_gpu, x, tmp)
+        spmv(self.A, x, tmp)
 
         # y = Q (A x)
         self.applyQ(tmp, y)
 
         # y = x - y
         axpby(1.0, x, -1.0, y)
+
+
+    def projT(self, x, y, tmp):
+        r'''
+        computes y = (I - AQ)x
+        with Q = V(V'AV)\V' (note that A is symmetric).
+        '''
+        return x - self.A @ self.applyQ(x)
+        self.applyQ(x, tmp)
+        spmv(self.A, tmp, y)
+
+        # y = x - y
+        axpby(1.0, x, -1.0, y)
+
+    def apply(self, x, y):
+        r'''
+        apply deflated operator A,
+          y = (I - AQ)A(I - QA)x,
+          Q = V (V'AV)\(V'x)
+        '''
+        # temporary vectors
+        v1 = cuda.device_array((self.n,), x.dtype)
+        v2 = cuda.device_array((self.n,), x.dtype)
+        self.proj(x, v1, v2) # compute v1, use v2 as workspace
+        spmv(self.A, v1, v2) # compute v2, use v1 as input
+        self.projT(v2, y, v1) # compute y, use v2 as input and v1 as workspace
+        return
+

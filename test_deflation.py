@@ -13,7 +13,7 @@ import pytest
 import numpy as np
 import scipy.sparse
 from kernels import to_device, to_host, clone, available_gpus
-from deflation import DeflatedOperator, partition_sparse_matrix
+from deflation import DeflatedOperator, partition_csr_matrix
 from matrix_generator import create_matrix
 
 class DeflationTest(unittest.TestCase):
@@ -36,7 +36,7 @@ class DeflationTest(unittest.TestCase):
         self.eps = 1e-12
 
     def test_partitioning(self):
-        part = partition_sparse_matrix(self.A_csr, self.nc)
+        part = partition_csr_matrix(self.A_csr, self.nc)
         assert len(part) == self.n
         assert np.max(part) == self.nc - 1
         assert np.min(part) == 0

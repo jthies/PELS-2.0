@@ -24,13 +24,22 @@ def d_sort(val, idx, i0, i1):
                 d_swap(idx, j, j + 1)
 
 @cuda.jit
-def cu_invert(v: float64[:]):
+def cu_invert_inplace(v: float64[:]):
     '''
     given a vector v, overwite v[i] = 1.0/v[i]
     '''
     idx = cuda.grid(1)
     if idx < v.size:
         v[idx] = 1.0/v[idx]
+
+@cuda.jit
+def cu_invert(v: float64[:], v_inv):
+    '''
+    given a vector v, computev_inv[i] = 1.0/v[i]
+    '''
+    idx = cuda.grid(1)
+    if idx < v.size:
+        v_inv[idx] = 1.0/v[idx]
 
 @cuda.jit
 def cu_ichol_pre(data, indptr, row_ind, col_ind):
@@ -136,3 +145,4 @@ def cu_ichol0(L_data, L_row_idx, L_col_idx, L_indptr):
 
         #if abs(L_ij_old-L_data[idx])<convtol:
         #    break
+
