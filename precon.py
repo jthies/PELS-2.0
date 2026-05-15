@@ -127,7 +127,7 @@ class IChol0:
         calls['setup'] += 1
         time['setup'] += t1-t0
         # for debugging
-        # CholFactor = from_device(self.L)
+        # CholFactor = to_host(self.L)
         # scipy.io.mmwrite('CholFactor',CholFactor)
 
 
@@ -196,7 +196,7 @@ class PyAMG:
 
     def __init__(self, A):
         t0 = perf_counter()
-        self.A  = from_device(A)
+        self.A  = to_host(A)
         self.AMG = pyamg.smoothed_aggregation_solver(self.A, max_coarse=20, max_levels=10)
         self.M = self.AMG.aspreconditioner(cycle='V')
         t1 = perf_counter()
@@ -205,7 +205,7 @@ class PyAMG:
 
     def apply(self, w, v):
         t0 = perf_counter()
-        v[:] = self.M@from_device(w)
+        v[:] = self.M@to_host(w)
         t1 = perf_counter()
         calls['apply'] += 1
         time['apply'] += t1-t0

@@ -43,13 +43,13 @@ def compile_all():
     if available_gpus()==0:
         raise 'no GPU available!'
     x = to_device(x)
-    tmp = from_device(x)
+    tmp = to_host(x)
     y = to_device(x)
     A1 = to_device(A1)
     L = to_device(L)
-    tmp= from_device(A1)
+    tmp= to_host(A1)
     A2 = to_device(A2)
-    tmp = from_device(A2)
+    tmp = to_host(A2)
     init(x,a)
     z = clone(x)
     s=dot(x,y)
@@ -69,15 +69,6 @@ def to_device(A):
     elif type(A) == scipy.sparse.dia_matrix:
         A.cu_data = cuda.to_device(A.data.reshape(A.data.size*A.offsets.size))
         A.cu_offsets = cuda.to_device(A.offsets)
-        return A
-    else:
-        return cuda.to_device(A)
-
-def from_device(A):
-    if type(A) == scipy.sparse.csr_matrix or type(A) == sellcs.sellcs_matrix:
-        A.data = A.cu_data.copy_to_host()
-        A.indices = A.cu_indices.copy_to_host()
-        A.indptr = A.cu_indptr.copy_to_host()
         return A
     else:
         return cuda.to_device(A)

@@ -15,7 +15,7 @@ from time import perf_counter
 from numba import cuda, jit, int32, float64
 import pymetis
 
-from kernels import to_device, from_device, clone, axpby, spmv
+from kernels import to_device, to_host, clone, axpby, spmv
 from cuda_deflation import cu_restrict, cu_prolongate, cu_sell_restrict
 
 from sellcs import sellcs_matrix
@@ -165,7 +165,7 @@ class DeflatedOperator:
                                      self.cu_part, self.cu_valV,self.cu_A_c)
         cuda.synchronize()
 
-        self.A_c = from_device(self.cu_A_c)
+        self.A_c = to_host(self.cu_A_c)
 
         self.L_c = np.linalg.cholesky(self.A_c)
 
@@ -186,7 +186,7 @@ class DeflatedOperator:
         cu_restrict[blockspergrid, threadsperblock](self.cu_ipart, self.cu_nmembers, self.cu_valV, x, x_c)
 
         # solve the projected linear system, y_c = (V^TAV) \ x_c
-        y_c = np.linalg.solve(self.L_c.T, np.linalg.solve(self.L_c, from_device(x_c)))
+        y_c = np.linalg.solve(self.L_c.T, np.linalg.solve(self.L_c, to_host(x_c)))
 
         # interpolate y = V*y_c
         threadsperblock = 256
