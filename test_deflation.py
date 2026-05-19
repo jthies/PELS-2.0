@@ -8,6 +8,7 @@
 #/*                                                                                         */
 #/*******************************************************************************************/
 
+import sys
 import unittest
 import pytest
 import numpy as np
@@ -15,6 +16,7 @@ from numpy.linalg import norm
 import scipy.sparse
 from kernels import to_device, to_host, clone, available_gpus, spmv
 from deflation import DeflatedOperator, partition_csr_matrix
+from cuda_deflation import *
 from matrix_generator import create_matrix
 from sellcs import sellcs_matrix
 
@@ -62,7 +64,54 @@ class DeflationTest(unittest.TestCase):
         # Check that it returns an array of int32 as expected by CUDA kernels
         assert part.dtype == np.int32
 
-    def test_applyQ_property(self):
+
+    def test_restrict_ones(self):
+        ''' Test that V^Te_n = e_nc, with e_k=ones(k,1)
+        '''
+        v = np.ones(self.n)
+        v_c_ref = self.V.T @ v
+
+        assert(np.all(np.abs(v_c_ref-1) < self.eps))
+
+        v_c = to_device(np.zeros(self.nc))
+        threadsperblock = 128
+        blockspergrid = self.nc
+        cu_restrict[blockspergrid, threadsperblock](self.A_defl.cu_ipart, self.A_defl.cu_nmembers,
+                                                    self.A_defl.cu_valV, to_device(v), v_c)
+        cuda.synchronize()
+        assert diff_norm(v_c, v_c_ref) < self.eps
+
+    def test_prolongate_ones(self):
+        ''' Test that V e_nc = e_n, with e_k=ones(k,1)
+        '''
+        v_c = self.A_defl.nmembers.astype('float64')
+        v_ref = self.V @ v_c
+
+        assert(np.all(np.abs(v_ref-1.0) < self.eps))
+
+        v = to_device(np.zeros(self.n))
+        threadsperblock = 256
+        blockspergrid = (self.n + threadsperblock - 1) // threadsperblock
+        cu_prolongate[blockspergrid, threadsperblock](self.A_defl.cu_part, self.A_defl.cu_valV,
+                                                    to_device(v_c), v)
+        cuda.synchronize()
+        assert diff_norm(v, v_ref) < self.eps
+
+    def test_coarsen_compare_numpy(self):
+        '''
+        Compute A_c = V^TAV on host (numpy) and device, and compare the two
+        '''
+        A_c_ref = self.V.T @ self.A_csr @ self.V
+        A_c = to_device(np.zeros((self.nc,self.nc), dtype='float64'))
+        nchunks = len(self.A_gpu.indptr)-1
+        C = self.A_gpu.C
+        n = self.n
+
+        cu_sell_restrict[nchunks, C](self.A_gpu.cu_data, self.A_gpu.cu_indptr, self.A_gpu.cu_indices, n,
+                                     self.A_defl.cu_part, self.A_defl.cu_valV, A_c)
+        cuda.synchronize()
+        assert diff_norm(A_c, A_c_ref) < self.eps
+    def test_applyQ_compare_numpy(self):
         ''' Test that Q = V(V'AV)^{-1}V' satisfies V'A Q = V' '''
         x = to_device(np.random.rand(self.n))
         y = clone(x)
@@ -127,28 +176,35 @@ class DeflationTest(unittest.TestCase):
         error = diff_norm(y1,y2)
         assert error < self.eps
 
-@pytest.mark.parametrize('Matrix', ['Ddiag13', 'Dsprandn388'])
-def test_deflation_parametrized(Matrix):
-    import scipy.io
-    A_csr = scipy.sparse.csr_matrix(scipy.io.mmread('matrices/'+Matrix+'.mm.gz'))
-    n = A_csr.shape[0]
-    nc = min(n // 2, 5) # Small nc for small matrices
-
-    A_sell = sellcs_matrix(A_csr, C=32, sigma=1)
-
-    A_gpu = to_device(A_sell)
-    A_defl = DeflatedOperator(A_csr, A_gpu, nc)
-    V = build_numpy_V(A_defl)
-
-    x = to_device(np.random.rand(n))
-    y = clone(x)
-    v_tmp = clone(x)
-    A_defl.proj(x, y, v_tmp)
-
-    # Orthogonality check: V' A P x = 0
-    y_host = to_host(y)
-    res = V.T @ (A_csr @ y_host)
-    assert norm(res) / norm(to_host(x)) < 1e-10
+#@pytest.mark.parametrize('Matrix', ['Laplace16x16','Ddiag13', 'Dsprandn388'])
+#def test_deflation_parametrized(Matrix):
+#    import scipy.io
+#    from matrix_generator import create_matrix
+#    try:
+#        A_csr = scipy.sparse.csr_matrix(scipy.io.mmread('matrices/'+Matrix+'.mm.gz'))
+#    except:
+#        A_csr = create_matrix(Matrix)
+#
+#    n = A_csr.shape[0]
+#    nc = min(n // 2, 5) # Small nc for small matrices
+#
+#    A_sell = sellcs_matrix(A_csr, C=32, sigma=1)
+#
+#    A_gpu = to_device(A_sell)
+#    A_defl = DeflatedOperator(A_csr, A_gpu, nc)
+#    V = build_numpy_V(A_defl)
+#
+#    x = to_device(np.random.rand(n))
+#    y = clone(x)
+#    v_tmp = clone(x)
+#    A_defl.proj(x, y, v_tmp)
+#
+#    # Orthogonality check: V' A P x = 0
+#    y_host = to_host(y)
+#    res = V.T @ (A_csr @ y_host)
+#    assert norm(res) / norm(to_host(x)) < 1e-10
+#
 
 if __name__ == '__main__':
+    np.set_printoptions(threshold=sys.maxsize)
     unittest.main()

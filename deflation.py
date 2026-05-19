@@ -152,9 +152,6 @@ class DeflatedOperator:
         self.valV = 1.0/self.nmembers.astype(np.float64)
         self.cu_valV = to_device(self.valV)
 
-        print('TROET')
-        print(self.valV)
-
         nchunks = len(self.A.indptr)-1
         C = self.A.C
         n = self.A.shape[0]
